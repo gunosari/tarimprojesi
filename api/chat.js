@@ -18,7 +18,7 @@ export default async function handler(req, res) {
   }
 
   const SQL = await initSqlJs({ locateFile: file => `https://sql.js.org/dist/${file}` });
-  const dbFile = readFileSync("db/tarimdb.sqlite");
+  const dbFile = readFileSync("tarimdb.sqlite");
   const db = new SQL.Database(new Uint8Array(dbFile));
   const tables = db.exec("SELECT name FROM sqlite_master WHERE type='table';");
 
