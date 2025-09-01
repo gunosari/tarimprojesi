@@ -1,137 +1,88 @@
-// api/chat.js — Vercel Node.js Serverless Function
+// api/chat.js — DEBUG SÜRÜMÜ (şemayı ve örnek veriyi de döndürür)
 export const config = { runtime: 'nodejs' };
 
 import fs from 'fs';
 import path from 'path';
 import initSqlJs from 'sql.js';
 
-/**
- * Girdi kuralları:
- *  - "Adana"                  -> İL'de en çok üretilen 10 ürün
- *  - "Adana / Ceyhan"         -> İL/İLÇE'de ürün listesi (Üretim ve Alan)
- *  - "Adana, Domates Sofralık"-> İL'de verilen ÜRÜN için en çok üretim yapan 10 ilçe
- *
- * Not: Kolon adları: "İl", "İlçe", "Ürün", "Yıl", "Alan", "Üretim"
- */
+function ok(res, data) { return res.status(200).json({ ok: true, ...data }); }
+function bad(res, msg, code = 400) { return res.status(code).json({ ok: false, error: msg }); }
 
-function ok(res, data) {
-  return res.status(200).json({ ok: true, ...data });
-}
-function bad(res, msg, code = 400) {
-  return res.status(code).json({ ok: false, error: msg });
+// Küçük yardımcı: sql.js çıktısını {rows:[...], columns:[...]}'a çevir
+function execRows(db, sql, params = []) {
+  const stmt = db.prepare(sql);
+  if (params.length) stmt.bind(params);
+  const rows = [];
+  const cols = stmt.getColumnNames();
+  while (stmt.step()) rows.push(stmt.getAsObject());
+  stmt.free();
+  return { columns: cols, rows };
 }
 
 export default async function handler(req, res) {
   try {
     if (req.method !== 'POST') return bad(res, 'Method Not Allowed', 405);
-
     const { question } = req.body || {};
-    if (!question || !String(question).trim()) {
-      return bad(res, 'question alanı zorunlu');
-    }
-
-    // sql.js wasm dosyasını bul
     const SQL = await initSqlJs({
       locateFile: (file) =>
         path.join(process.cwd(), 'node_modules/sql.js/dist', file),
     });
 
-    // DB dosyasını public klasöründen oku
     const dbPath = path.join(process.cwd(), 'public', 'tarimdb.sqlite');
-    if (!fs.existsSync(dbPath)) {
-      return bad(res, 'tarimdb.sqlite bulunamadı', 500);
-    }
-    const fileBuffer = fs.readFileSync(dbPath);
-    const db = new SQL.Database(fileBuffer);
+    if (!fs.existsSync(dbPath)) return bad(res, 'tarimdb.sqlite bulunamadı', 500);
+    const db = new SQL.Database(fs.readFileSync(dbPath));
 
-    // --- Sorgu Yorumlama ---
-    const raw = String(question).trim();
+    // --- ŞEMA & ÖRNEKLER (teşhis için) ---
+    const tables = execRows(db, "SELECT name FROM sqlite_master WHERE type='table'");
+    const schemaSebze = execRows(db, "PRAGMA table_info(sebze)");
+    const sampleSebze = execRows(db, "SELECT * FROM sebze LIMIT 5");
+    const distinctIl = execRows(db, 'SELECT DISTINCT "İl" FROM sebze LIMIT 20');
+    const distinctIl_alt = execRows(db, 'SELECT DISTINCT il FROM sebze LIMIT 20'); // ASCII olasılığı
 
-    // "İl, Ürün" -> il bazında bu ürün için en çok üretim yapan 10 ilçe
+    // --- Normal Sorgu (ilk deneme: Türkçe başlıklar) ---
+    let mode = 'il_top_urun', results = [];
+    const raw = String(question || '').trim();
+
     if (raw.includes(',')) {
+      mode = 'il_urun_ilce_top';
       const [ilInput, urunInput] = raw.split(',').map(s => s.trim());
-      if (!ilInput || !urunInput) return bad(res, 'Biçim: "İl, Ürün"');
-
-      const stmt = db.prepare(`
-        SELECT "İlçe" AS ilce,
-               SUM("Üretim") AS uretim,
-               SUM("Alan")   AS alan
-        FROM sebze
-        WHERE "İl" = ? AND "Ürün" = ?
-        GROUP BY "İlçe"
-        ORDER BY uretim DESC
-        LIMIT 10;
-      `);
-      stmt.bind([ilInput, urunInput]);
-
-      const rows = [];
-      while (stmt.step()) rows.push(stmt.getAsObject());
-      stmt.free();
-
-      return ok(res, {
-        mode: 'il_urun_ilce_top',
-        query: { il: ilInput, urun: urunInput },
-        results: rows,
-      });
-    }
-
-    // "İl / İlçe" -> ilçe içinde ürün listesi
-    if (raw.includes('/')) {
+      results = execRows(db, `
+        SELECT "İlçe" AS ilce, SUM("Üretim") AS uretim, SUM("Alan") AS alan
+        FROM sebze WHERE "İl" = ? AND "Ürün" = ?
+        GROUP BY "İlçe" ORDER BY uretim DESC LIMIT 10
+      `, [ilInput, urunInput]).rows;
+    } else if (raw.includes('/')) {
+      mode = 'il_ilce_urun_listesi';
       const [ilInput, ilceInput] = raw.split('/').map(s => s.trim());
-      if (!ilInput || !ilceInput) return bad(res, 'Biçim: "İl / İlçe"');
-
-      const stmt = db.prepare(`
-        SELECT "Ürün" AS urun,
-               SUM("Üretim") AS uretim,
-               SUM("Alan")   AS alan
-        FROM sebze
-        WHERE "İl" = ? AND "İlçe" = ?
-        GROUP BY "Ürün"
-        ORDER BY uretim DESC, alan DESC;
-      `);
-      stmt.bind([ilInput, ilceInput]);
-
-      const rows = [];
-      while (stmt.step()) rows.push(stmt.getAsObject());
-      stmt.free();
-
-      return ok(res, {
-        mode: 'il_ilce_urun_listesi',
-        query: { il: ilInput, ilce: ilceInput },
-        results: rows,
-      });
+      results = execRows(db, `
+        SELECT "Ürün" AS urun, SUM("Üretim") AS uretim, SUM("Alan") AS alan
+        FROM sebze WHERE "İl" = ? AND "İlçe" = ?
+        GROUP BY "Ürün" ORDER BY uretim DESC, alan DESC
+      `, [ilInput, ilceInput]).rows;
+    } else if (raw) {
+      mode = 'il_top_urun';
+      const ilInput = raw;
+      results = execRows(db, `
+        SELECT "Ürün" AS urun, SUM("Üretim") AS uretim, SUM("Alan") AS alan
+        FROM sebze WHERE "İl" = ?
+        GROUP BY "Ürün" ORDER BY uretim DESC LIMIT 10
+      `, [ilInput]).rows;
     }
-
-    // Sadece "İl" -> ilde en çok üretilen 10 ürün
-    const ilInput = raw;
-    const stmt = db.prepare(`
-      SELECT "Ürün" AS urun,
-             SUM("Üretim") AS uretim,
-             SUM("Alan")   AS alan
-      FROM sebze
-      WHERE "İl" = ?
-      GROUP BY "Ürün"
-      ORDER BY uretim DESC
-      LIMIT 10;
-    `);
-    stmt.bind([ilInput]);
-
-    const rows = [];
-    while (stmt.step()) rows.push(stmt.getAsObject());
-    stmt.free();
 
     return ok(res, {
-      mode: 'il_top_urun',
-      query: { il: ilInput },
-      results: rows,
+      mode, query: { question: raw || null },
+      results,
+      // --- DEBUG VERİSİ ---
+      debug: {
+        tables: tables.rows.map(r => r.name),
+        schema_sebze: schemaSebze.rows,            // -> {cid, name, type, ...}
+        sample_sebze: sampleSebze.rows,            // ilk 5 satır
+        distinct_Il: distinctIl.rows,              // "İl" kolonu varsa
+        distinct_il_ascii: distinctIl_alt.rows     // "il" kolonu varsa
+      }
     });
-
   } catch (err) {
     console.error('API hata:', err);
-    return res.status(500).json({
-      ok: false,
-      error: 'FUNCTION_INVOCATION_FAILED',
-      detail: String(err),
-    });
+    return res.status(500).json({ ok: false, error: 'FUNCTION_INVOCATION_FAILED', detail: String(err) });
   }
 }
