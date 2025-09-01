@@ -1,14 +1,30 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="tr">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Tarım Chatbot</title>
-</head>
-<body style="font-family:sans-serif;display:grid;place-items:center;height:100vh;background:#f2f2f2">
-  <main>
-    <h1>🧠 Tarım Chatbot Çalışıyor</h1>
-    <p>API test etmek için: <a href="/api/chat" target="_blank">/api/chat</a></p>
-  </main>
-</body>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Tarım Chatbot</title>
+  </head>
+  <body>
+    <h1>Tarım Chatbot Çalışıyor</h1>
+    <p>API test için aşağıdan soru gönder:</p>
+
+    <input id="q" placeholder="ör. Mersin" />
+    <button id="send">Gönder</button>
+
+    <pre id="out"></pre>
+
+    <script>
+      const $ = (s) => document.querySelector(s);
+      document.getElementById('send').onclick = async () => {
+        const question = $('#q').value;
+        const r = await fetch('/api/chat', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ question })
+        });
+        $('#out').textContent = await r.text();
+      };
+    </script>
+  </body>
 </html>
