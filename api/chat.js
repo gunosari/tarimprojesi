@@ -6,6 +6,9 @@ import path from 'path';
 import initSqlJs from 'sql.js';
 import OpenAI from 'openai';
 
+// =================== Ayarlar ===================
+const MODEL = process.env.OPENAI_MODEL || "gpt-4o-mini"; // <— buradan modeli yönet
+
 // ====== Yardımcılar ======
 function qToText(rows, lineFmt) {
   if (!rows || rows.length === 0) return 'Veri bulunamadı.';
@@ -29,7 +32,7 @@ function isSafeSql(sql) {
     // stringler, sayılar zaten elenir; kalan isimlerde sadece allowed olsun
     if (/^[a-zıiöüçğ_"]+$/i.test(t) && !allowed.includes(t)) {
       // SQL anahtar kelimelerini es geç
-      if (!['select','sum','from','where','and','or','group','by','order','desc','asc','limit','as','having'].includes(t))
+      if (!['select','sum','from','where','and','or','group','by','order','desc','asc','limit','as','having','avg','count','min','max'].includes(t))
         return false;
     }
   }
@@ -40,6 +43,10 @@ function isSafeSql(sql) {
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 async function nlToSql(nl) {
+  if (!process.env.OPENAI_API_KEY) {
+    throw new Error('OPENAI_API_KEY tanımlı değil');
+  }
+
   const system = `
 Sen bir NL→SQLite SQL çevirmenisin.
 Sadece şu tablo var: ${TABLE}("${COLS.join('","')}")
@@ -58,7 +65,7 @@ Mantıklıysa GROUP BY ve ORDER BY ekle, LIMIT uygula.
   `;
 
   const resp = await openai.responses.create({
-    model: "gpt-5.1-mini",
+    model: MODEL, // <— burada
     input: [{ role: "system", content: system }, { role: "user", content: user }],
   });
 
@@ -70,9 +77,10 @@ Mantıklıysa GROUP BY ve ORDER BY ekle, LIMIT uygula.
 
 // ====== GPT Katmanı: veriyi doğal cümleye çevir ======
 async function prettyAnswer(question, rows) {
+  if (!process.env.OPENAI_API_KEY) return '';
   const sample = Array.isArray(rows) ? rows.slice(0, 5) : [];
   const resp = await openai.responses.create({
-    model: "gpt-5.1-mini",
+    model: MODEL, // <— burada da aynı model
     input: [
       { role: "system", content: "Kısa ve net Türkçe cevap ver. Sayıları binlik ayırıcı ile yaz." },
       { role: "user", content: `Soru: ${question}\nVeri örneği (JSON): ${JSON.stringify(sample)}\nVeri toplam satır: ${rows.length}\nBu veriye göre 1-2 cümlelik insani cevap yaz.` }
