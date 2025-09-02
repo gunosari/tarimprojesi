@@ -1,4 +1,4 @@
-// api/chat.js — NL→SQL (GPT + kural yedek), ürün eşleşmeleri LIKE ile
+// api/chat.js — NL→SQL (GPT + kural yedek), 2024 oto-yıl, ürün başta-eşleşme, debug görünür
 export const config = { runtime: 'nodejs' };
 
 import fs from 'fs';
@@ -6,18 +6,22 @@ import path from 'path';
 import initSqlJs from 'sql.js';
 import OpenAI from 'openai';
 
-// ===== Ayarlar =====
+/** ======= Ayarlar ======= **/
 const TABLE = 'urunler';
 const MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
+const DEFAULT_YEAR = 2024;        // veriniz tek yıl ise burada ayarlayın
+const AUTO_INJECT_DEFAULT_YEAR = true; // doğal cümlede yıl yoksa otomatik bu yılı ekle
+const FORCE_GPT_ONLY = false;     // sadece GPT çıktısını test etmek istersen true yap
+const DEBUG_ROWS = true;          // debug metni açık/kapat
 
-// Küçük yardımcılar
+/** ======= Yardımcılar ======= **/
 const escapeSQL = (s='') => String(s).replace(/'/g, "''");
 function qToText(rows, lineFmt) {
   if (!rows || rows.length === 0) return 'Veri bulunamadı.';
   return rows.map(lineFmt).join('\n');
 }
 
-// Dinamik şema (PRAGMA)
+// PRAGMA ile tablo kolonlarını oku (dinamik şema)
 function getColumns(SQL, db) {
   try {
     const out = [];
@@ -30,7 +34,7 @@ function getColumns(SQL, db) {
   }
 }
 
-// Güvenlik filtresi (tek SELECT, yorum yok, sadece whitelist isimler)
+// Basit güvenlik filtresi
 function makeIsSafeSql(allowedNames) {
   const allow = new Set(allowedNames.map(s => s.toLowerCase()));
   return (sql) => {
@@ -41,8 +45,8 @@ function makeIsSafeSql(allowedNames) {
     for (const t of toks) {
       if (/^[a-zıiöüçğ_"]+$/i.test(t) && !allow.has(t)) {
         if (!['select','sum','avg','count','min','max',
-              'from','where','and','or','group','by','order',
-              'desc','asc','limit','as','having','like','between','in','distinct'].includes(t)) {
+               'from','where','and','or','group','by','order',
+               'desc','asc','limit','as','having','like','between','in','distinct'].includes(t)) {
           return false;
         }
       }
@@ -51,8 +55,33 @@ function makeIsSafeSql(allowedNames) {
   };
 }
 
-// ===== GPT Katmanı =====
+/** ======= GPT Katmanı ======= **/
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
+function headMatchExpr(raw) {
+  // "biber" -> "Biber"
+  const H = String(raw||'').trim();
+  const head = H.charAt(0).toUpperCase() + H.slice(1).toLowerCase();
+  // "Ürün" LIKE 'Biber %' OR "Ürün"='Biber'
+  return `("Ürün" LIKE '${escapeSQL(head)} %' OR "Ürün"='${escapeSQL(head)}')`;
+}
+
+function autoYear(sql) {
+  if (!AUTO_INJECT_DEFAULT_YEAR) return sql;
+  if (!sql) return sql;
+  const hasWhere = /where/i.test(sql);
+  const hasYear  = /"Yıl"\s*=/.test(sql);
+  if (hasYear) return sql;
+  if (hasWhere) {
+    return sql.replace(/where/i, `WHERE "Yıl" = ${DEFAULT_YEAR} AND `);
+  } else {
+    // ORDER/GROUP/LIMIT gelirse onlardan önce ekle
+    const m = sql.match(/\b(order|group|limit)\b/i);
+    if (!m) return `${sql} WHERE "Yıl" = ${DEFAULT_YEAR}`;
+    const idx = m.index;
+    return `${sql.slice(0, idx)} WHERE "Yıl" = ${DEFAULT_YEAR} ${sql.slice(idx)}`;
+  }
+}
 
 async function nlToSql_gpt(nl, cols, catCol) {
   if (!process.env.OPENAI_API_KEY) return '';
@@ -61,10 +90,10 @@ async function nlToSql_gpt(nl, cols, catCol) {
 Sen bir NL→SQLite SQL çevirmenisin.
 Tek tablo: ${TABLE}("${cols.join('","')}")
 - "Üretim": ton, "Alan": dekar, "Yıl": tam sayı.
-- Kategori/çeşit kolonu: "${catCol}".
-- Yıl verilmezse tüm yılları topla.
-- Ürün adı kullanıcı tarafından genel verildiyse, "Ürün" eşleşmesini eşitlik yerine LIKE ile yap:
-  "Ürün" LIKE '%' || <ürün_adı> || '%'
+- Kategori/çeşit kolonu: "${catCol}" (varsa).
+- Yıl belirtilmemişse tüm yılları topla; ancak biz sonradan 2024 enjekte edebiliriz.
+- Ürün adı genel verildiyse eşitlik yerine BAŞTA-EŞLEŞME kullan:
+  "Ürün" LIKE 'Xxx %' OR "Ürün"='Xxx'
 - Sadece TEK bir SELECT döndür ve SADECE SQL yaz.
 - Kolonları double-quote ile yaz.
   `.trim();
@@ -87,15 +116,16 @@ Tablo adı: ${TABLE}.
     .trim()
     .replace(/;+\s*$/,''); // sondaki ; kaldır
 
-  // Ürün = 'xxx' gördüysek LIKE'a çevir (domates → '%domates%')
-  sql = sql.replace(/"Ürün"\s*=\s*'([^']+)'/gi, (_m, val) =>
-    `"Ürün" LIKE '%' || '${escapeSQL(val)}' || '%'`
-  );
+  // "Ürün" = 'domates' gibi eşitliği başta-eşleşmeye çevir
+  sql = sql.replace(/"Ürün"\s*=\s*'([^']+)'/gi, (_m, val) => headMatchExpr(val));
+
+  // 2024 oto-enjeksiyon
+  sql = autoYear(sql);
 
   return sql;
 }
 
-// ===== Kural Tabanlı Yedek =====
+/** ======= Kural Tabanlı Yedek ======= **/
 function ruleBasedSql(nlRaw, cols, catCol) {
   const nl = String(nlRaw || '').trim();
 
@@ -103,10 +133,10 @@ function ruleBasedSql(nlRaw, cols, catCol) {
   const mIl = nl.match(/([A-ZÇĞİÖŞÜ][a-zçğıöşü]+)(?:[’'`´]?[dt]e|[’'`´]?[dt]a|\s|$)/);
   const il = mIl ? mIl[1] : '';
 
-  // Yıl
+  // Yıl (yine de ekleyelim; oto-yıl ayrıca enjekte edilecek)
   const year = (nl.match(/\b(19\d{2}|20\d{2})\b/) || [])[1] || '';
 
-  // Ürün anahtarları (geniş liste)
+  // Ürün adayını çıkar
   const known = /(domates|biber|patlıcan|kabak|hıyar|salatalık|karpuz|karnabahar|lahana|marul|fasulye|soğan|sarımsak|patates|brokoli|ispanak|maydanoz|enginar|bezelye|bakla|elma|portakal|mandalina|limon|muz|zeytin|üzüm|armut|şeftali|kayısı|nar|incir|vişne|çilek|kiraz|kavun|ayva|fındık|ceviz|antep fıstığı|buğday|arpa|mısır|çeltik|pirinç|yulaf|çavdar|ayçiçeği|kanola)/i;
   let urun = (nl.match(known) || [])[1] || '';
   if (!urun) {
@@ -115,7 +145,7 @@ function ruleBasedSql(nlRaw, cols, catCol) {
   }
   urun = (urun || '').replace(/["'’`´]+/g,'').trim();
 
-  // Kategori (Ürün Çeşidi / Kategori)
+  // Kategori/çeşit (metinden)
   let kat = '';
   if (/sebze/i.test(nl)) kat = 'Sebze';
   else if (/meyve/i.test(nl)) kat = 'Meyve';
@@ -134,12 +164,14 @@ function ruleBasedSql(nlRaw, cols, catCol) {
 
   // 2) belli bir ürün üretimi
   if (il && urun && /üretim/i.test(nl)) {
+    const likeHead = headMatchExpr(urun);
     return `
       SELECT SUM("Üretim") AS toplam_uretim
       FROM ${TABLE}
       WHERE "İl"='${escapeSQL(il)}'
-        AND "Ürün" LIKE '%' || '${escapeSQL(urun)}' || '%'
+        AND ${likeHead}
         ${year ? `AND "Yıl"=${Number(year)}` : ''}
+        ${/sebze|meyve|tah[ıi]l/i.test(nl) ? `AND "${catCol}"='${/sebze/i.test(nl) ? 'Sebze' : /meyve/i.test(nl) ? 'Meyve' : 'Tahıl'}'` : ''}
     `.trim();
   }
 
@@ -171,11 +203,12 @@ function ruleBasedSql(nlRaw, cols, catCol) {
 
   // 5) ürün en çok hangi ilçelerde?
   if (il && urun && /en çok hangi ilçelerde/i.test(nl)) {
+    const likeHead = headMatchExpr(urun);
     return `
       SELECT "İlçe" AS ilce, SUM("Üretim") AS uretim, SUM("Alan") AS alan
       FROM ${TABLE}
       WHERE "İl"='${escapeSQL(il)}'
-        AND "Ürün" LIKE '%' || '${escapeSQL(urun)}' || '%'
+        AND ${likeHead}
         ${year ? `AND "Yıl"=${Number(year)}` : ''}
       GROUP BY "İlçe"
       ORDER BY uretim DESC
@@ -197,7 +230,7 @@ function ruleBasedSql(nlRaw, cols, catCol) {
   return '';
 }
 
-// ===== Güzel cevap (opsiyonel GPT) =====
+/** ======= Güzel cevap (opsiyonel GPT) ======= **/
 async function prettyAnswer(question, rows) {
   if (!process.env.OPENAI_API_KEY) {
     if (!rows?.length) return 'Veri bulunamadı.';
@@ -209,13 +242,13 @@ async function prettyAnswer(question, rows) {
     model: MODEL,
     input: [
       { role: 'system', content: 'Kısa ve net Türkçe cevap ver. Sayıları binlik ayırıcıyla yaz.' },
-      { role: 'user', content: `Soru: ${question}\nÖrnek veri: ${JSON.stringify(sample)}\nToplam satır: ${rows.length}\n1-2 cümle özet yaz.` }
+      { role: 'user',  content: `Soru: ${question}\nÖrnek veri: ${JSON.stringify(sample)}\nToplam satır: ${rows.length}\n1-2 cümle özet yaz.` }
     ],
   });
   return (r.output_text || '').trim();
 }
 
-// ===== Handler =====
+/** ======= Handler ======= **/
 export default async function handler(req, res) {
   try {
     if (req.method !== 'POST') {
@@ -243,19 +276,19 @@ export default async function handler(req, res) {
     const catCol = hasKategori ? 'Kategori' : (hasCesit ? 'Ürün Çeşidi' : 'Kategori');
     const isSafeSql = makeIsSafeSql([TABLE, ...COLS.map(c => `"${c}"`)]);
 
-    // Kısa yol: "İl, Ürün" -> ilçe top10 (LIKE)
+    // Kısa yol: "İl, Ürün" -> ilçe top10 (başta-eşleşme)
     if (raw.includes(',')) {
       const [ilInput, urunInput] = raw.split(',').map(s => s.trim());
       const stmt = db.prepare(`
         SELECT "İlçe" AS ilce, SUM("Üretim") AS uretim, SUM("Alan") AS alan
         FROM ${TABLE}
-        WHERE "İl" = ? AND "Ürün" LIKE '%' || ? || '%'
+        WHERE "İl" = ? AND ${headMatchExpr(urunInput)}
         GROUP BY "İlçe"
         ORDER BY uretim DESC
         LIMIT 10;
       `);
       const rows = [];
-      stmt.bind([ilInput, urunInput]);
+      stmt.bind([ilInput]);
       while (stmt.step()) rows.push(stmt.getAsObject());
       stmt.free();
       const text = qToText(rows, r => `• ${r.ilce}: ${r.uretim} ton, ${r.alan} dekar`);
@@ -273,24 +306,31 @@ export default async function handler(req, res) {
       used = 'fallback-rules';
     }
 
-    // 2) Uygunsuz/boşsa kural tabanlı
+    // 2) Uygunsuz/boşsa (ve GPT-only mod kapalıysa) kural tabanlı
     if (!sql || !isSafeSql(sql)) {
+      if (FORCE_GPT_ONLY) {
+        res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+        res.status(200).send(`🧭 Mod: gpt-only | GPT SQL geçersiz/boş\nSQL:\n${sql || '(yok)'}`);
+        return;
+      }
       const rb = ruleBasedSql(raw, COLS, catCol);
       if (rb && isSafeSql(rb)) { sql = rb; used = 'rules'; }
     }
 
-    // 3) Hâlâ SQL yoksa: il adına göre top ürünler
+    // 3) Hâlâ SQL yoksa: il adına göre top ürünler (debug dostu)
     if (!sql) {
       const ilInput = raw;
-      const stmt = db.prepare(`
+      let tmp = `
         SELECT "Ürün" AS urun, SUM("Üretim") AS uretim, SUM("Alan") AS alan
         FROM ${TABLE}
         WHERE "İl" = ?
         GROUP BY "Ürün"
         ORDER BY uretim DESC
-        LIMIT 10;
-      `);
+        LIMIT 10
+      `.trim();
+      tmp = AUTO_INJECT_DEFAULT_YEAR ? tmp.replace('WHERE "İl" = ?', `WHERE "Yıl"=${DEFAULT_YEAR} AND "İl" = ?`) : tmp;
       const rows = [];
+      const stmt = db.prepare(tmp);
       stmt.bind([ilInput]);
       while (stmt.step()) rows.push(stmt.getAsObject());
       stmt.free();
@@ -312,13 +352,17 @@ export default async function handler(req, res) {
       return;
     }
 
-    // 5) Özet
+    // 5) Özet + Debug
     const nice = await prettyAnswer(raw, rows);
+    const debugText = DEBUG_ROWS
+      ? `\n\n-- DEBUG --\nKolonlar: ${COLS.join(', ')}\nSQL:\n${sql}\nİlk 5 Satır:\n${JSON.stringify(rows.slice(0,5), null, 2)}`
+      : '';
     res.setHeader('Content-Type', 'text/plain; charset=utf-8');
     res.status(200).send(
       `🧭 Mod: ${used} (model: ${MODEL})${gptErr ? ` | gptErr: ${gptErr}` : ''}\n` +
-      `Soru: ${raw}\nSQL: ${sql}\n\n${nice}\n\n` +
-      (rows.length ? qToText(rows, r => '• ' + JSON.stringify(r)) : 'Veri bulunamadı.')
+      `Soru: ${raw}\n\n${nice}\n\n` +
+      (rows.length ? qToText(rows, r => '• ' + JSON.stringify(r)) : 'Veri bulunamadı.') +
+      debugText
     );
 
   } catch (err) {
