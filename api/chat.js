@@ -1,70 +1,41 @@
-// pages/api/chat.js
-
-import fs from 'fs';
-import path from 'path';
+import { sqliteDb } from '@/lib/db';
 
 export default async function handler(req, res) {
-  if (req.method !== 'GET') {
-    return res.status(405).send('Sadece GET isteklerine izin verilir');
+  if (req.method === 'POST') {
+    try {
+      const { question } = req.body;
+
+      if (!question || typeof question !== 'string') {
+        return res.status(400).json({ error: 'Geçerli bir il adı giriniz.' });
+      }
+
+      const result = await sqliteDb.prepare(`
+        SELECT il, urun_adi, 
+               SUM(uretim_miktari) AS toplam_uretim, 
+               SUM(uretim_alani) AS toplam_alani
+        FROM sebze
+        WHERE il = ?
+        GROUP BY urun_adi
+        ORDER BY toplam_uretim DESC
+        LIMIT 10
+      `).all(question.trim());
+
+      if (!result.length) {
+        return res.status(200).json({ cevap: `${question} için veri bulunamadı.` });
+      }
+
+      const cevap = result.map(r =>
+        `🥕 ${r.urun_adi} — ${r.toplam_uretim} ton (${r.toplam_alani} da)`
+      ).join('\n');
+
+      return res.status(200).send(cevap);
+
+    } catch (error) {
+      console.error('Hata:', error);
+      return res.status(500).json({ error: 'Sunucu hatası oluştu.' });
+    }
+
+  } else {
+    return res.status(405).send('Sadece POST isteklerine izin verilir');
   }
-
-  const soru = req.query.q;
-  if (!soru) {
-    return res.status(400).send('Soru parametresi gerekli');
-  }
-
-  const dbPath = path.join(process.cwd(), 'public', 'tarimdb.sqlite');
-  const sqlite3 = require('sqlite3').verbose();
-  const db = new sqlite3.Database(dbPath);
-
-  let mode = "";
-  let results = [];
-
-  // Basit örnek: il ismi varsa en çok üretilen ürünleri getir
-  const iller = ["Adana", "Mersin", "Antalya", "İzmir", "Bursa", "Konya"];
-  const secilenIl = iller.find(il => soru.includes(il));
-
-  if (secilenIl) {
-    mode = "il_top_urun";
-
-    const query = `
-      SELECT urun, SUM(uretim_miktari) as uretim, SUM(alan) as alan
-      FROM sebze_uretim
-      WHERE il = ?
-      GROUP BY urun
-      ORDER BY uretim DESC
-      LIMIT 5
-    `;
-
-    await new Promise((resolve, reject) => {
-      db.all(query, [secilenIl], (err, rows) => {
-        if (err) reject(err);
-        results = rows;
-        resolve();
-      });
-    });
-
-    db.close();
-
-    // HTML çıktı hazırla
-    const htmlOutput = `
-      <h2>${secilenIl} ili için en çok üretilen ürünler:</h2>
-      <ul>
-        ${results.map(r => `
-          <li>
-            <strong>${r.urun.trim()}</strong><br/>
-            Üretim: ${r.uretim.toLocaleString()} ton<br/>
-            Alan: ${r.alan.toLocaleString()} dekar
-          </li>
-        `).join('')}
-      </ul>
-    `;
-
-    res.setHeader('Content-Type', 'text/html');
-    return res.status(200).send(htmlOutput);
-  }
-
-  // İl tanınmadıysa:
-  res.setHeader('Content-Type', 'text/html');
-  return res.status(200).send(`<p>Maalesef "${soru}" hakkında bilgi bulunamadı. Lütfen il ismini doğru yazdığınızdan emin olun.</p>`);
 }
