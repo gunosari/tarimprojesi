@@ -1,12 +1,16 @@
-// api/chat.js — DEBUG (soru zorunlu değil)
 export const config = { runtime: 'nodejs' };
 
 import fs from 'fs';
 import path from 'path';
 import initSqlJs from 'sql.js';
 
-function ok(res, data) { return res.status(200).json({ ok: true, ...data }); }
-function bad(res, msg, code = 400) { return res.status(code).json({ ok: false, error: msg }); }
+function ok(res, data) {
+  return res.status(200).json({ ok: true, ...data });
+}
+
+function bad(res, msg, code = 400) {
+  return res.status(code).json({ ok: false, error: msg });
+}
 
 function execRows(db, sql, params = []) {
   const stmt = db.prepare(sql);
@@ -39,9 +43,9 @@ export default async function handler(req, res) {
     const schemaSebze = execRows(db, "PRAGMA table_info(sebze)");
     const sampleSebze = execRows(db, "SELECT * FROM sebze LIMIT 5");
     const distinct_Il    = execRows(db, 'SELECT DISTINCT "İl"  FROM sebze LIMIT 20');
-    const distinct_il    = execRows(db, 'SELECT DISTINCT il   FROM sebze LIMIT 20');
+    const distinct_il    = execRows(db, 'SELECT DISTINCT "İl"  FROM sebze LIMIT 20');  // DÜZELTİLDİ
     const distinct_Urun  = execRows(db, 'SELECT DISTINCT "Ürün" FROM sebze LIMIT 20');
-    const distinct_urun  = execRows(db, 'SELECT DISTINCT urun FROM sebze LIMIT 20');
+    const distinct_urun  = execRows(db, 'SELECT DISTINCT "Ürün" FROM sebze LIMIT 20'); // DÜZELTİLDİ
 
     // --- Normal sorgu (varsa) ---
     let mode = 'debug_only', results = [];
@@ -79,7 +83,7 @@ export default async function handler(req, res) {
       results,
       debug: {
         tables: tables.rows.map(r => r.name),
-        schema_sebze: schemaSebze.rows,   // {cid,name,type,...}
+        schema_sebze: schemaSebze.rows,
         sample_sebze: sampleSebze.rows,
         distinct_Il: distinct_Il.rows,
         distinct_il: distinct_il.rows,
