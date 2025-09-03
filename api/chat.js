@@ -1,3 +1,121 @@
+// api/chat.js — NL→SQL (GPT + kural yedek), 2024 oto-yıl, ürün başta-eşleşme, debug görünür
+export const config = { runtime: 'nodejs' };
+import fs from 'fs';
+import path from 'path';
+import initSqlJs from 'sql.js';
+import OpenAI from 'openai';
+
+/** ======= Ayarlar ======= **/
+const TABLE = 'urunler';
+const MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
+const DEFAULT_YEAR = 2024; // veriniz tek yıl ise burada ayarlayın
+const AUTO_INJECT_DEFAULT_YEAR = true; // doğal cümlede yıl yoksa otomatik bu yılı ekle
+const FORCE_GPT_ONLY = false; // sadece GPT çıktısını test etmek istersen true yap
+const DEBUG_ROWS = true; // debug metni açık/kapat
+
+/** ======= Yardımcılar ======= **/
+const escapeSQL = (s = '') => String(s).replace(/'/g, "''");
+function qToText(rows, lineFmt) {
+  if (!rows || rows.length === 0) return 'Veri bulunamadı.';
+  return rows.map(lineFmt).join('\n');
+}
+// PRAGMA ile tablo kolonlarını oku (dinamik şema)
+function getColumns(SQL, db) {
+  try {
+    const out = [];
+    const st = db.prepare(`PRAGMA table_info("${TABLE}");`);
+    while (st.step()) out.push(st.getAsObject().name);
+    st.free();
+    // Eğer urun_cesidi yoksa, hata mesajı ekle (debug için)
+    if (!out.includes('urun_cesidi')) {
+      console.log('Uyarı: urun_cesidi kolonu bulunamadı. Kategorizasyon yapılamıyor.');
+    }
+    return out;
+  } catch {
+    return ['il', 'ilce', 'urun_cesidi', 'urun_adi', 'yil', 'uretim_alani', 'uretim_miktari', 'verim'];
+  }
+}
+// Basit güvenlik filtresi
+function makeIsSafeSql(allowedNames) {
+  const allow = new Set(allowedNames.map(s => s.toLowerCase()));
+  return (sql) => {
+    const s = (sql || '').trim().toLowerCase();
+    if (!s.startsWith('select')) return false;
+    if (s.includes('--') || s.includes('/*')) return false;
+    const toks = s.replace(/[^a-z0-9_ğüşöçıİĞÜŞÖÇ" ]/gi, ' ').split(/\s+/).filter(Boolean);
+    for (const t of toks) {
+      if (/^[a-zıiöüçğ_"]+$/i.test(t) && !allow.has(t)) {
+        if (!['select', 'sum', 'avg', 'count', 'min', 'max',
+               'from', 'where', 'and', 'or', 'group', 'by', 'order',
+               'desc', 'asc', 'limit', 'as', 'having', 'like', 'between', 'in', 'distinct'].includes(t)) {
+          return false;
+        }
+      }
+    }
+    return true;
+  };
+}
+
+/** ======= GPT Katmanı ======= **/
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+function headMatchExpr(raw) {
+  const H = String(raw || '').trim();
+  const head = H.charAt(0).toUpperCase() + H.slice(1).toLowerCase();
+  return `("urun_adi" LIKE '%${escapeSQL(H)}%' OR "urun_adi" LIKE '%${escapeSQL(head)}%')`;
+}
+function autoYear(sql) {
+  if (!AUTO_INJECT_DEFAULT_YEAR) return sql;
+  if (!sql) return sql;
+  const hasWhere = /where/i.test(sql);
+  const hasYear = /"yil"\s*=/.test(sql);
+  if (hasYear) return sql;
+  if (hasWhere) {
+    return sql.replace(/where/i, `WHERE "yil" = ${DEFAULT_YEAR} AND `);
+  } else {
+    const m = sql.match(/\b(order|group|limit)\b/i);
+    if (!m) return `${sql} WHERE "yil" = ${DEFAULT_YEAR}`;
+    const idx = m.index;
+    return `${sql.slice(0, idx)} WHERE "yil" = ${DEFAULT_YEAR} ${sql.slice(idx)}`;
+  }
+}
+async function nlToSql_gpt(nl, cols, catCol) {
+  if (!process.env.OPENAI_API_KEY) return '';
+  const system = `
+You are an NL→SQLite SQL translator.
+Single table: ${TABLE}("${cols.join('","')}")
+- "uretim_miktari": tons, "uretim_alani": decares, "yil": integer, "verim": tons/decares.
+- Category/variety column: "${catCol}" (if exists).
+- If year is not specified, aggregate all years; however, 2024 can be injected later.
+- For general product names (e.g., "üzüm", "portakal", "domates"), extract the product name from the question and use HEAD-MATCH: "urun_adi" LIKE '%[product_name]%' OR "urun_adi" LIKE '%[Product_Name]%' to include all variants (e.g., "Sofralık Üzüm", "Şaraplık Üzüm").
+- If the question specifies a category (e.g., "meyve" for fruit, "tahıl" for grain), filter by "${catCol}" = 'Meyve' or equivalent.
+- For "ekim alanı", use SUM("uretim_alani") with GROUP BY "urun_adi" and ORDER BY SUM("uretim_alani") DESC LIMIT 1 to get the product with the largest area.
+- For phrases like "en çok üretilen", use SUM("uretim_miktari") with GROUP BY "urun_adi" and ORDER BY "Toplam Üretim" DESC LIMIT 1.
+- For "hangi ilçelerde", group by district.
+- Return a SINGLE SELECT statement and ONLY SQL. Use double-quotes for column names.
+  `.trim();
+  const user = `
+Question: """${nl}"""
+- Extract the product name from the question (e.g., "üzüm" from "Mersin üzüm ekim alanı", "portakal" from "Mersin portakal ekim alanı").
+- "ekim alanı" -> SUM("uretim_alani") with GROUP BY "urun_adi" ORDER BY SUM("uretim_alani") DESC LIMIT 1, filtered by the extracted product name.
+- "en çok üretilen" -> SUM("uretim_miktari") with GROUP BY "urun_adi" ORDER BY SUM("uretim_miktari") DESC LIMIT 1.
+- Apply filters for category if mentioned (e.g., "meyve" -> "${catCol}" = 'Meyve').
+- Use HEAD-MATCH for the product name (e.g., "urun_adi" LIKE '%üzüm%' OR "urun_adi" LIKE '%Üzüm%').
+- Table name: ${TABLE}.
+  `.trim();
+  const r = await openai.chat.completions.create({
+    model: MODEL,
+    messages: [{ role: 'system', content: system }, { role: 'user', content: user }],
+  });
+  let sql = (r.choices[0].message.content || '')
+    .replace(/```[\s\S]*?```/g, s => s.replace(/```(sql)?/g,'').replace(/```/g,''))
+    .trim()
+    .replace(/;+\s*$/,'');
+  sql = sql.replace(/"urun_adi"\s*=\s*'([^']+)'/gi, (_m, val) => headMatchExpr(val));
+  sql = autoYear(sql);
+  return sql;
+}
+
+/** ======= Kural Tabanlı Yedek ======= **/
 function ruleBasedSql(nlRaw, cols, catCol) {
   const nl = String(nlRaw || '').trim();
   const mIl = nl.match(/([A-ZÇĞİÖŞÜ][a-zçğıöşü]+)(?:[’'`´]?[dt]e|[’'`´]?[dt]a|\s|$)/);
@@ -261,12 +379,3 @@ export default async function handler(req, res) {
     res.status(500).json({ ok: false, error: 'FUNCTION_INVOCATION_FAILED', detail: String(err) });
   }
 }
-</xaiArtifact>
-
-### Yapman Gerekenler
-1. **Kodu Güncelle:** Yukarıdaki `api/chat.js` kodunu kopyalayıp mevcut dosyayla değiştir.
-2. **Deploy Et:** 
-   ```bash
-   git add api/chat.js
-   git commit -m "Tüm ürünler için genelleştirilmiş ekim alanı sorgusu"
-   git push
