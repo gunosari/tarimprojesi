@@ -88,12 +88,14 @@ Single table: ${TABLE}("${cols.join('","')}")
 - If year is not specified, aggregate all years; however, 2024 can be injected later.
 - For general product names, use HEAD-MATCH: "urun_adi" LIKE 'Xxx %' OR "urun_adi"='Xxx'.
 - If the question specifies a category (e.g., "meyve" for fruit, "tahıl" for grain), filter by "${catCol}" = 'Meyve' or equivalent.
+- For "ekim alanı", use SUM("uretim_alani").
 - For phrases like "en çok üretilen", use SUM("uretim_miktari") with GROUP BY "urun_adi" and ORDER BY "Toplam Üretim" DESC LIMIT 1.
 - For "hangi ilçelerde", group by district.
 - Return a SINGLE SELECT statement and ONLY SQL. Use double-quotes for column names.
   `.trim();
   const user = `
 Question: """${nl}"""
+- "ekim alanı" -> SUM("uretim_alani").
 - "en çok üretilen" -> SUM("uretim_miktari") with GROUP BY "urun_adi" ORDER BY SUM("uretim_miktari") DESC LIMIT 1.
 - Apply filters for category if mentioned (e.g., "meyve" -> "${catCol}" = 'Meyve').
 - Table name: ${TABLE}.
@@ -144,7 +146,22 @@ function ruleBasedSql(nlRaw, cols, catCol) {
       LIMIT 1
     `.trim();
   }
-  // 2) "ne oldu" gibi genel sorgular için varsayılan üretim toplamı
+  // 2) "ekim alanı" için
+  if (il && /(ekim )?alan/i.test(nl)) {
+    const likeHead = urun ? headMatchExpr(urun) : '';
+    return `
+      SELECT "urun_adi" AS urun, SUM("uretim_alani") AS toplam_alan
+      FROM ${TABLE}
+      WHERE "il"='${escapeSQL(il)}'
+        ${likeHead ? `AND ${likeHead}` : ''}
+        ${year ? `AND "yil"=${Number(year)}` : ''}
+        ${kat ? `AND "${catCol}"='${escapeSQL(kat)}'` : ''}
+      GROUP BY "urun_adi"
+      ORDER BY toplam_alan DESC
+      LIMIT 1
+    `.trim();
+  }
+  // 3) "ne oldu" gibi genel sorgular için varsayılan üretim toplamı
   if (il && /ne oldu/i.test(nl)) {
     const likeHead = urun ? headMatchExpr(urun) : '';
     return `
@@ -156,7 +173,7 @@ function ruleBasedSql(nlRaw, cols, catCol) {
         ${kat ? `AND "${catCol}"='${escapeSQL(kat)}'` : ''}
     `.trim();
   }
-  // 3) toplam üretim (sebze/meyve/tahıl olabilir)
+  // 4) toplam üretim (sebze/meyve/tahıl olabilir)
   if (il && (/kaç\s+ton/i.test(nl) || /toplam.*üretim/i.test(nl)) && !urun) {
     return `
       SELECT SUM("uretim_miktari") AS toplam_uretim
@@ -166,7 +183,7 @@ function ruleBasedSql(nlRaw, cols, catCol) {
         ${year ? `AND "yil"=${Number(year)}` : ''}
     `.trim();
   }
-  // 4) belli bir ürün üretimi
+  // 5) belli bir ürün üretimi
   if (il && urun && /üretim/i.test(nl)) {
     const likeHead = headMatchExpr(urun);
     return `
@@ -178,7 +195,7 @@ function ruleBasedSql(nlRaw, cols, catCol) {
         ${/sebze|meyve|tah[ıi]l/i.test(nl) ? `AND "${catCol}"='${/sebze/i.test(nl) ? 'Sebze' : /meyve/i.test(nl) ? 'Meyve' : 'Tahıl'}'` : ''}
     `.trim();
   }
-  // 5) toplam ekim alanı
+  // 6) toplam ekim alanı
   if (il && /(toplam)?.*(ekim )?alan/i.test(nl)) {
     return `
       SELECT SUM("uretim_alani") AS toplam_alan
@@ -188,7 +205,7 @@ function ruleBasedSql(nlRaw, cols, catCol) {
         ${year ? `AND "yil"=${Number(year)}` : ''}
     `.trim();
   }
-  // 6) ilde en çok üretilen N ürün
+  // 7) ilde en çok üretilen N ürün
   const topN = (nl.match(/en çok üretilen\s+(\d+)/i) || [])[1] || 10;
   if (il && /(en çok üretilen\s+\d+\s+ürün|en çok üretilen ürün)/i.test(nl)) {
     return `
@@ -202,7 +219,7 @@ function ruleBasedSql(nlRaw, cols, catCol) {
       LIMIT ${Number(topN)}
     `.trim();
   }
-  // 7) ürün en çok hangi ilçelerde?
+  // 8) ürün en çok hangi ilçelerde?
   if (il && urun && /en çok hangi ilçelerde/i.test(nl)) {
     const likeHead = headMatchExpr(urun);
     return `
@@ -216,7 +233,7 @@ function ruleBasedSql(nlRaw, cols, catCol) {
       LIMIT 10
     `.trim();
   }
-  // 8) ortalama verim
+  // 9) ortalama verim
   if (il && /verim/i.test(nl)) {
     return `
       SELECT CASE WHEN SUM("uretim_alani")>0 THEN ROUND(SUM("uretim_miktari")/SUM("uretim_alani"), 4) ELSE NULL END AS ort_verim
