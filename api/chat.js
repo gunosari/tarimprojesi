@@ -237,11 +237,12 @@ async function prettyAnswer(question, rows) {
     return `${rows.length} satır döndü.`;
   }
   const sample = Array.isArray(rows) ? rows.slice(0, 5) : [];
+  const year = rows.length > 0 ? rows[0].yil : DEFAULT_YEAR; // SQL'den yılı al
   const r = await openai.chat.completions.create({
     model: MODEL,
     messages: [
-      { role: 'system', content: 'Kısa ve net Türkçe cevap ver. Sayıları binlik ayırıcıyla yaz. Sadece verilen verilere dayan, varsayım yapma.' },
-      { role: 'user', content: `Soru: ${question}\nÖrnek veri: ${JSON.stringify(sample)}\nToplam satır: ${rows.length}\n1-2 cümle özet yaz, yıl olarak sadece SQL'deki yılı kullan.` }
+      { role: 'system', content: 'Kısa ve net Türkçe cevap ver. Sayıları binlik ayırıcıyla yaz. Sadece verilen verilere ve belirtilen yıla (eğer varsa) dayan, varsayım yapma.' },
+      { role: 'user', content: `Soru: ${question}\nÖrnek veri: ${JSON.stringify(sample)}\nToplam satır: ${rows.length}\nYıl: ${year}\n1-2 cümle özet yaz, yılı yalnızca verilen yıl olarak kullan.` }
     ],
   });
   return (r.choices[0].message.content || '').trim();
@@ -324,7 +325,7 @@ export default async function handler(req, res) {
       const rows = [];
       const stmt = db.prepare(tmp);
       stmt.bind([ilInput]);
-      while (stmt.step()) rows.push(stmt.getAsObject());
+      while (stmt.step()) rows.push(st.getAsObject());
       stmt.free();
       const text = qToText(rows, r => `• ${r.urun?.trim?.()}: ${r.uretim} ton, ${r.alan} dekar`);
       res.setHeader('Content-Type', 'text/plain; charset=utf-8');
