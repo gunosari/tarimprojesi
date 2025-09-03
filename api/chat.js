@@ -77,34 +77,32 @@ function autoYear(sql) {
 async function nlToSql_gpt(nl, cols, catCol) {
   if (!process.env.OPENAI_API_KEY) return '';
   const system = `
-Sen bir NL→SQLite SQL çevirmenisin.
-Tek tablo: ${TABLE}("${cols.join('","')}")
-- "Üretim": ton, "Alan": dekar, "Yıl": tam sayı.
-- Kategori/çeşit kolonu: "${catCol}" (varsa).
-- Yıl belirtilmemişse tüm yılları topla; ancak biz sonradan 2024 enjekte edebiliriz.
-- Ürün adı genel verildiyse eşitlik yerine BAŞTA-EŞLEŞME kullan:
-  "Ürün" LIKE 'Xxx %' OR "Ürün"='Xxx'
-- Sadece TEK bir SELECT döndür ve SADECE SQL yaz.
-- Kolonları double-quote ile yaz.
+You are an NL→SQLite SQL translator.
+Single table: ${TABLE}("${cols.join('","')}")
+- "Üretim": tons, "Alan": decares, "Yıl": integer.
+- Category/variety column: "${catCol}" (if exists).
+- If year is not specified, aggregate all years; however, 2024 can be injected later.
+- For general product names, use HEAD-MATCH: "Ürün" LIKE 'Xxx %' OR "Ürün"='Xxx'.
+- For phrases like "ne oldu", "kaç ton", "toplam", "alan", use SUM("Üretim"), SUM("Alan"), or yield (SUM("Üretim")/SUM("Alan")) as appropriate.
+- If "hangi ilçelerde" is present, group by district.
+- Return a SINGLE SELECT statement and ONLY SQL. Use double-quotes for column names.
   `.trim();
   const user = `
-Soru: """${nl}"""
-"kaç ton/toplam" -> SUM("Üretim"), "alan" -> SUM("Alan"), "verim" -> SUM("Üretim")/SUM("Alan").
-Gerektiğinde GROUP BY / ORDER BY / LIMIT uygula.
-Tablo adı: ${TABLE}.
+Question: """${nl}"""
+- "kaç ton/toplam" -> SUM("Üretim"), "alan" -> SUM("Alan"), "verim" -> SUM("Üretim")/SUM("Alan").
+- Apply GROUP BY / ORDER BY / LIMIT when needed.
+- Table name: ${TABLE}.
+- For ambiguous questions (e.g., "ne oldu"), default to SUM("Üretim") with relevant filters (il, product, year).
   `.trim();
-  const r = await openai.responses.create({
+  const r = await openai.chat.completions.create({
     model: MODEL,
-    input: [{ role: 'system', content: system }, { role: 'user', content: user }],
+    messages: [{ role: 'system', content: system }, { role: 'user', content: user }],
   });
-  // Metni al, codeblockları soy, sondayı normalize et
-  let sql = (r.output_text || '')
+  let sql = (r.choices[0].message.content || '')
     .replace(/```[\s\S]*?```/g, s => s.replace(/```(sql)?/g,'').replace(/```/g,''))
     .trim()
-    .replace(/;+\s*$/,''); // sondaki ; kaldır
-  // "Ürün" = 'domates' gibi eşitliği başta-eşleşmeye çevir
+    .replace(/;+\s*$/,'');
   sql = sql.replace(/"Ürün"\s*=\s*'([^']+)'/gi, (_m, val) => headMatchExpr(val));
-  // 2024 oto-enjeksiyon
   sql = autoYear(sql);
   return sql;
 }
@@ -129,7 +127,19 @@ function ruleBasedSql(nlRaw, cols, catCol) {
   if (/sebze/i.test(nl)) kat = 'Sebze';
   else if (/meyve/i.test(nl)) kat = 'Meyve';
   else if (/tah[ıi]l/i.test(nl)) kat = 'Tahıl';
-  // 1) toplam üretim (sebze/meyve/tahıl olabilir)
+  // 1) "ne oldu" gibi genel sorgular için varsayılan üretim toplamı
+  if (il && /ne oldu/i.test(nl)) {
+    const likeHead = urun ? headMatchExpr(urun) : '';
+    return `
+      SELECT SUM("Üretim") AS toplam_uretim
+      FROM ${TABLE}
+      WHERE "İl"='${escapeSQL(il)}'
+        ${likeHead ? `AND ${likeHead}` : ''}
+        ${year ? `AND "Yıl"=${Number(year)}` : ''}
+        ${kat ? `AND "${catCol}"='${escapeSQL(kat)}'` : ''}
+    `.trim();
+  }
+  // 2) toplam üretim (sebze/meyve/tahıl olabilir)
   if (il && (/kaç\s+ton/i.test(nl) || /toplam.*üretim/i.test(nl)) && !urun) {
     return `
       SELECT SUM("Üretim") AS toplam_uretim
@@ -139,7 +149,7 @@ function ruleBasedSql(nlRaw, cols, catCol) {
         ${year ? `AND "Yıl"=${Number(year)}` : ''}
     `.trim();
   }
-  // 2) belli bir ürün üretimi
+  // 3) belli bir ürün üretimi
   if (il && urun && /üretim/i.test(nl)) {
     const likeHead = headMatchExpr(urun);
     return `
@@ -151,7 +161,7 @@ function ruleBasedSql(nlRaw, cols, catCol) {
         ${/sebze|meyve|tah[ıi]l/i.test(nl) ? `AND "${catCol}"='${/sebze/i.test(nl) ? 'Sebze' : /meyve/i.test(nl) ? 'Meyve' : 'Tahıl'}'` : ''}
     `.trim();
   }
-  // 3) toplam ekim alanı
+  // 4) toplam ekim alanı
   if (il && /(toplam)?.*(ekim )?alan/i.test(nl)) {
     return `
       SELECT SUM("Alan") AS toplam_alan
@@ -161,7 +171,7 @@ function ruleBasedSql(nlRaw, cols, catCol) {
         ${year ? `AND "Yıl"=${Number(year)}` : ''}
     `.trim();
   }
-  // 4) ilde en çok üretilen N ürün
+  // 5) ilde en çok üretilen N ürün
   const topN = (nl.match(/en çok üretilen\s+(\d+)/i) || [])[1] || 10;
   if (il && /(en çok üretilen\s+\d+\s+ürün|en çok üretilen ürün)/i.test(nl)) {
     return `
@@ -175,7 +185,7 @@ function ruleBasedSql(nlRaw, cols, catCol) {
       LIMIT ${Number(topN)}
     `.trim();
   }
-  // 5) ürün en çok hangi ilçelerde?
+  // 6) ürün en çok hangi ilçelerde?
   if (il && urun && /en çok hangi ilçelerde/i.test(nl)) {
     const likeHead = headMatchExpr(urun);
     return `
@@ -189,7 +199,7 @@ function ruleBasedSql(nlRaw, cols, catCol) {
       LIMIT 10
     `.trim();
   }
-  // 6) ortalama verim
+  // 7) ortalama verim
   if (il && /verim/i.test(nl)) {
     return `
       SELECT CASE WHEN SUM("Alan")>0 THEN ROUND(SUM("Üretim")/SUM("Alan"), 4) ELSE NULL END AS ort_verim
@@ -209,14 +219,14 @@ async function prettyAnswer(question, rows) {
     return `${rows.length} satır döndü.`;
   }
   const sample = Array.isArray(rows) ? rows.slice(0, 5) : [];
-  const r = await openai.responses.create({
+  const r = await openai.chat.completions.create({
     model: MODEL,
-    input: [
+    messages: [
       { role: 'system', content: 'Kısa ve net Türkçe cevap ver. Sayıları binlik ayırıcıyla yaz.' },
       { role: 'user', content: `Soru: ${question}\nÖrnek veri: ${JSON.stringify(sample)}\nToplam satır: ${rows.length}\n1-2 cümle özet yaz.` }
     ],
   });
-  return (r.output_text || '').trim();
+  return (r.choices[0].message.content || '').trim();
 }
 /** ======= Handler ======= **/
 export default async function handler(req, res) {
@@ -241,6 +251,8 @@ export default async function handler(req, res) {
     const hasCesit = COLS.includes('Ürün Çeşidi');
     const catCol = hasKategori ? 'Kategori' : (hasCesit ? 'Ürün Çeşidi' : 'Kategori');
     const isSafeSql = makeIsSafeSql([TABLE, ...COLS.map(c => `"${c}"`)]);
+    // Debug için sorguyu log'la
+    console.log(`Sorgu: ${raw}`);
     // Kısa yol: "İl, Ürün" -> ilçe top10 (başta-eşleşme)
     if (raw.includes(',')) {
       const [ilInput, urunInput] = raw.split(',').map(s => s.trim());
@@ -328,4 +340,4 @@ export default async function handler(req, res) {
     console.error('API hata:', err);
     res.status(500).json({ ok: false, error: 'FUNCTION_INVOCATION_FAILED', detail: String(err) });
   }
-} bunu senin yaptığın değişikliklerle komple yazar mısın direkt kopyalayacağım
+}
