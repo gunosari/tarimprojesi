@@ -1,26 +1,22 @@
 // api/chat.js — NL→SQL (GPT + kural yedek), 2024 oto-yıl, ürün başta-eşleşme, debug görünür
 export const config = { runtime: 'nodejs' };
-
 import fs from 'fs';
 import path from 'path';
 import initSqlJs from 'sql.js';
 import OpenAI from 'openai';
-
 /** ======= Ayarlar ======= **/
 const TABLE = 'urunler';
 const MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
-const DEFAULT_YEAR = 2024;        // veriniz tek yıl ise burada ayarlayın
+const DEFAULT_YEAR = 2024; // veriniz tek yıl ise burada ayarlayın
 const AUTO_INJECT_DEFAULT_YEAR = true; // doğal cümlede yıl yoksa otomatik bu yılı ekle
-const FORCE_GPT_ONLY = false;     // sadece GPT çıktısını test etmek istersen true yap
-const DEBUG_ROWS = true;          // debug metni açık/kapat
-
+const FORCE_GPT_ONLY = false; // sadece GPT çıktısını test etmek istersen true yap
+const DEBUG_ROWS = true; // debug metni açık/kapat
 /** ======= Yardımcılar ======= **/
 const escapeSQL = (s='') => String(s).replace(/'/g, "''");
 function qToText(rows, lineFmt) {
   if (!rows || rows.length === 0) return 'Veri bulunamadı.';
   return rows.map(lineFmt).join('\n');
 }
-
 // PRAGMA ile tablo kolonlarını oku (dinamik şema)
 function getColumns(SQL, db) {
   try {
@@ -33,7 +29,6 @@ function getColumns(SQL, db) {
     return ['İl','İlçe','Ürün Çeşidi','Ürün','Yıl','Alan','Üretim','Verim'];
   }
 }
-
 // Basit güvenlik filtresi
 function makeIsSafeSql(allowedNames) {
   const allow = new Set(allowedNames.map(s => s.toLowerCase()));
@@ -54,10 +49,8 @@ function makeIsSafeSql(allowedNames) {
     return true;
   };
 }
-
 /** ======= GPT Katmanı ======= **/
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-
 function headMatchExpr(raw) {
   // "biber" -> "Biber"
   const H = String(raw||'').trim();
@@ -65,12 +58,11 @@ function headMatchExpr(raw) {
   // "Ürün" LIKE 'Biber %' OR "Ürün"='Biber'
   return `("Ürün" LIKE '${escapeSQL(head)} %' OR "Ürün"='${escapeSQL(head)}')`;
 }
-
 function autoYear(sql) {
   if (!AUTO_INJECT_DEFAULT_YEAR) return sql;
   if (!sql) return sql;
   const hasWhere = /where/i.test(sql);
-  const hasYear  = /"Yıl"\s*=/.test(sql);
+  const hasYear = /"Yıl"\s*=/.test(sql);
   if (hasYear) return sql;
   if (hasWhere) {
     return sql.replace(/where/i, `WHERE "Yıl" = ${DEFAULT_YEAR} AND `);
@@ -82,10 +74,8 @@ function autoYear(sql) {
     return `${sql.slice(0, idx)} WHERE "Yıl" = ${DEFAULT_YEAR} ${sql.slice(idx)}`;
   }
 }
-
 async function nlToSql_gpt(nl, cols, catCol) {
   if (!process.env.OPENAI_API_KEY) return '';
-
   const system = `
 Sen bir NL→SQLite SQL çevirmenisin.
 Tek tablo: ${TABLE}("${cols.join('","')}")
@@ -97,45 +87,35 @@ Tek tablo: ${TABLE}("${cols.join('","')}")
 - Sadece TEK bir SELECT döndür ve SADECE SQL yaz.
 - Kolonları double-quote ile yaz.
   `.trim();
-
   const user = `
 Soru: """${nl}"""
 "kaç ton/toplam" -> SUM("Üretim"), "alan" -> SUM("Alan"), "verim" -> SUM("Üretim")/SUM("Alan").
 Gerektiğinde GROUP BY / ORDER BY / LIMIT uygula.
 Tablo adı: ${TABLE}.
   `.trim();
-
   const r = await openai.responses.create({
     model: MODEL,
     input: [{ role: 'system', content: system }, { role: 'user', content: user }],
   });
-
   // Metni al, codeblockları soy, sondayı normalize et
   let sql = (r.output_text || '')
     .replace(/```[\s\S]*?```/g, s => s.replace(/```(sql)?/g,'').replace(/```/g,''))
     .trim()
     .replace(/;+\s*$/,''); // sondaki ; kaldır
-
   // "Ürün" = 'domates' gibi eşitliği başta-eşleşmeye çevir
   sql = sql.replace(/"Ürün"\s*=\s*'([^']+)'/gi, (_m, val) => headMatchExpr(val));
-
   // 2024 oto-enjeksiyon
   sql = autoYear(sql);
-
   return sql;
 }
-
 /** ======= Kural Tabanlı Yedek ======= **/
 function ruleBasedSql(nlRaw, cols, catCol) {
   const nl = String(nlRaw || '').trim();
-
   // İl
   const mIl = nl.match(/([A-ZÇĞİÖŞÜ][a-zçğıöşü]+)(?:[’'`´]?[dt]e|[’'`´]?[dt]a|\s|$)/);
   const il = mIl ? mIl[1] : '';
-
   // Yıl (yine de ekleyelim; oto-yıl ayrıca enjekte edilecek)
   const year = (nl.match(/\b(19\d{2}|20\d{2})\b/) || [])[1] || '';
-
   // Ürün adayını çıkar
   const known = /(domates|biber|patlıcan|kabak|hıyar|salatalık|karpuz|karnabahar|lahana|marul|fasulye|soğan|sarımsak|patates|brokoli|ispanak|maydanoz|enginar|bezelye|bakla|elma|portakal|mandalina|limon|muz|zeytin|üzüm|armut|şeftali|kayısı|nar|incir|vişne|çilek|kiraz|kavun|ayva|fındık|ceviz|antep fıstığı|buğday|arpa|mısır|çeltik|pirinç|yulaf|çavdar|ayçiçeği|kanola)/i;
   let urun = (nl.match(known) || [])[1] || '';
@@ -144,13 +124,11 @@ function ruleBasedSql(nlRaw, cols, catCol) {
     if (mu) urun = mu[1];
   }
   urun = (urun || '').replace(/["'’`´]+/g,'').trim();
-
   // Kategori/çeşit (metinden)
   let kat = '';
   if (/sebze/i.test(nl)) kat = 'Sebze';
   else if (/meyve/i.test(nl)) kat = 'Meyve';
   else if (/tah[ıi]l/i.test(nl)) kat = 'Tahıl';
-
   // 1) toplam üretim (sebze/meyve/tahıl olabilir)
   if (il && (/kaç\s+ton/i.test(nl) || /toplam.*üretim/i.test(nl)) && !urun) {
     return `
@@ -161,7 +139,6 @@ function ruleBasedSql(nlRaw, cols, catCol) {
         ${year ? `AND "Yıl"=${Number(year)}` : ''}
     `.trim();
   }
-
   // 2) belli bir ürün üretimi
   if (il && urun && /üretim/i.test(nl)) {
     const likeHead = headMatchExpr(urun);
@@ -174,7 +151,6 @@ function ruleBasedSql(nlRaw, cols, catCol) {
         ${/sebze|meyve|tah[ıi]l/i.test(nl) ? `AND "${catCol}"='${/sebze/i.test(nl) ? 'Sebze' : /meyve/i.test(nl) ? 'Meyve' : 'Tahıl'}'` : ''}
     `.trim();
   }
-
   // 3) toplam ekim alanı
   if (il && /(toplam)?.*(ekim )?alan/i.test(nl)) {
     return `
@@ -185,7 +161,6 @@ function ruleBasedSql(nlRaw, cols, catCol) {
         ${year ? `AND "Yıl"=${Number(year)}` : ''}
     `.trim();
   }
-
   // 4) ilde en çok üretilen N ürün
   const topN = (nl.match(/en çok üretilen\s+(\d+)/i) || [])[1] || 10;
   if (il && /(en çok üretilen\s+\d+\s+ürün|en çok üretilen ürün)/i.test(nl)) {
@@ -200,7 +175,6 @@ function ruleBasedSql(nlRaw, cols, catCol) {
       LIMIT ${Number(topN)}
     `.trim();
   }
-
   // 5) ürün en çok hangi ilçelerde?
   if (il && urun && /en çok hangi ilçelerde/i.test(nl)) {
     const likeHead = headMatchExpr(urun);
@@ -215,7 +189,6 @@ function ruleBasedSql(nlRaw, cols, catCol) {
       LIMIT 10
     `.trim();
   }
-
   // 6) ortalama verim
   if (il && /verim/i.test(nl)) {
     return `
@@ -226,10 +199,8 @@ function ruleBasedSql(nlRaw, cols, catCol) {
         ${year ? `AND "Yıl"=${Number(year)}` : ''}
     `.trim();
   }
-
   return '';
 }
-
 /** ======= Güzel cevap (opsiyonel GPT) ======= **/
 async function prettyAnswer(question, rows) {
   if (!process.env.OPENAI_API_KEY) {
@@ -242,40 +213,34 @@ async function prettyAnswer(question, rows) {
     model: MODEL,
     input: [
       { role: 'system', content: 'Kısa ve net Türkçe cevap ver. Sayıları binlik ayırıcıyla yaz.' },
-      { role: 'user',  content: `Soru: ${question}\nÖrnek veri: ${JSON.stringify(sample)}\nToplam satır: ${rows.length}\n1-2 cümle özet yaz.` }
+      { role: 'user', content: `Soru: ${question}\nÖrnek veri: ${JSON.stringify(sample)}\nToplam satır: ${rows.length}\n1-2 cümle özet yaz.` }
     ],
   });
   return (r.output_text || '').trim();
 }
-
 /** ======= Handler ======= **/
 export default async function handler(req, res) {
   try {
     if (req.method !== 'POST') {
       res.status(405).json({ ok: false, error: 'Sadece POST isteklerine izin verilir' }); return;
     }
-
     const { question } = req.body || {};
     const raw = String(question ?? '').trim();
     if (!raw) { res.status(400).json({ ok: false, error: 'question alanı zorunlu' }); return; }
-
     // sql.js başlat
     const SQL = await initSqlJs({
       locateFile: (file) => path.join(process.cwd(), 'node_modules/sql.js/dist', file),
     });
-
     // DB
     const dbPath = path.join(process.cwd(), 'public', 'tarimdb.sqlite');
     if (!fs.existsSync(dbPath)) { res.status(500).json({ ok: false, error: 'tarimdb.sqlite bulunamadı' }); return; }
     const db = new SQL.Database(fs.readFileSync(dbPath));
-
     // Şema ve güvenlik
     const COLS = getColumns(SQL, db);
     const hasKategori = COLS.includes('Kategori');
-    const hasCesit    = COLS.includes('Ürün Çeşidi');
+    const hasCesit = COLS.includes('Ürün Çeşidi');
     const catCol = hasKategori ? 'Kategori' : (hasCesit ? 'Ürün Çeşidi' : 'Kategori');
     const isSafeSql = makeIsSafeSql([TABLE, ...COLS.map(c => `"${c}"`)]);
-
     // Kısa yol: "İl, Ürün" -> ilçe top10 (başta-eşleşme)
     if (raw.includes(',')) {
       const [ilInput, urunInput] = raw.split(',').map(s => s.trim());
@@ -296,7 +261,6 @@ export default async function handler(req, res) {
       res.status(200).send(`🧭 Mod: il_urun_ilce_top\nİl: ${ilInput} | Ürün: ${urunInput}\n\n${text}`);
       return;
     }
-
     // 1) GPT ile dene
     let used = 'nl2sql-gpt', gptErr = '', sql = '';
     try {
@@ -305,7 +269,6 @@ export default async function handler(req, res) {
       gptErr = `${e?.status || e?.code || ''} ${e?.message || String(e)}`;
       used = 'fallback-rules';
     }
-
     // 2) Uygunsuz/boşsa (ve GPT-only mod kapalıysa) kural tabanlı
     if (!sql || !isSafeSql(sql)) {
       if (FORCE_GPT_ONLY) {
@@ -316,7 +279,6 @@ export default async function handler(req, res) {
       const rb = ruleBasedSql(raw, COLS, catCol);
       if (rb && isSafeSql(rb)) { sql = rb; used = 'rules'; }
     }
-
     // 3) Hâlâ SQL yoksa: il adına göre top ürünler (debug dostu)
     if (!sql) {
       const ilInput = raw;
@@ -339,7 +301,6 @@ export default async function handler(req, res) {
       res.status(200).send(`🧭 Mod: fallback_il_top_urun\nİl: ${ilInput}\n\n${text}`);
       return;
     }
-
     // 4) SQL'i çalıştır
     let rows = [];
     try {
@@ -351,7 +312,6 @@ export default async function handler(req, res) {
       res.status(200).send(`🧭 Mod: ${used} (model: ${MODEL})\nSQL derlenemedi.\nSQL:\n${sql}\n\nHata: ${String(e)}`);
       return;
     }
-
     // 5) Özet + Debug
     const nice = await prettyAnswer(raw, rows);
     const debugText = DEBUG_ROWS
@@ -364,9 +324,8 @@ export default async function handler(req, res) {
       (rows.length ? qToText(rows, r => '• ' + JSON.stringify(r)) : 'Veri bulunamadı.') +
       debugText
     );
-
   } catch (err) {
     console.error('API hata:', err);
     res.status(500).json({ ok: false, error: 'FUNCTION_INVOCATION_FAILED', detail: String(err) });
   }
-}
+} bunu senin yaptığın değişikliklerle komple yazar mısın direkt kopyalayacağım
