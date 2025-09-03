@@ -10,7 +10,7 @@ const TABLE = 'urunler';
 const MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
 const DEFAULT_YEAR = 2024; // veriniz tek yıl ise burada ayarlayın
 const AUTO_INJECT_DEFAULT_YEAR = true; // doğal cümlede yıl yoksa otomatik bu yılı ekle
-const FORCE_GPT_ONLY = false; // sadece GPT çıktısını test etmek istersen true yap
+const FORCE_GPT_ONLY = true; // Kural tabanlıyı kapat, sadece GPT çalışsın
 const DEBUG_ROWS = true; // debug metni açık/kapat
 
 /** ======= Yardımcılar ======= **/
@@ -83,20 +83,22 @@ async function nlToSql_gpt(nl, cols, catCol) {
   const system = `
 You are an NL→SQLite SQL translator.
 Single table: ${TABLE}("${cols.join('","')}")
-- "uretim_miktari": tons, "uretim_alani": decares, "yil": integer, "verim": tons/decares.
+- "uretim_miktari": tons (production amount), "uretim_alani": decares (cultivated area), "yil": integer, "verim": tons/decares.
 - Category/variety column: "${catCol}" (if exists).
 - If year is not specified, aggregate all years; however, 2024 can be injected later.
 - For general product names (e.g., "üzüm", "portakal", "domates"), extract the product name from the question and use HEAD-MATCH: "urun_adi" LIKE '%[product_name]%' OR "urun_adi" LIKE '%[Product_Name]%' to include all variants (e.g., "Sofralık Üzüm", "Şaraplık Üzüm").
+- If the question asks for "üretim" (production), use SUM("uretim_miktari") without GROUP BY to get the total production for all variants of the product.
+- If the question asks for "ekim alanı" (cultivated area), use SUM("uretim_alani") without GROUP BY to get the total area for all variants of the product.
 - If the question specifies a category (e.g., "meyve" for fruit, "tahıl" for grain), filter by "${catCol}" = 'Meyve' or equivalent.
-- For "ekim alanı", use SUM("uretim_alani") with GROUP BY "urun_adi" and ORDER BY SUM("uretim_alani") DESC LIMIT 1 to get the product with the largest area.
-- For phrases like "en çok üretilen", use SUM("uretim_miktari") with GROUP BY "urun_adi" and ORDER BY "Toplam Üretim" DESC LIMIT 1.
+- For phrases like "en çok üretilen", use SUM("uretim_miktari") with GROUP BY "urun_adi" and ORDER BY SUM("uretim_miktari") DESC LIMIT 1.
 - For "hangi ilçelerde", group by district.
 - Return a SINGLE SELECT statement and ONLY SQL. Use double-quotes for column names.
   `.trim();
   const user = `
 Question: """${nl}"""
-- Extract the product name from the question (e.g., "üzüm" from "Mersin üzüm ekim alanı", "portakal" from "Mersin portakal ekim alanı").
-- "ekim alanı" -> SUM("uretim_alani") with GROUP BY "urun_adi" ORDER BY SUM("uretim_alani") DESC LIMIT 1, filtered by the extracted product name.
+- Extract the product name from the question (e.g., "üzüm" from "Mersin üzüm üretimi", "portakal" from "Mersin portakal ekim alanı").
+- If "üretim" is mentioned, use SUM("uretim_miktari") without GROUP BY, filtered by the extracted product name.
+- If "ekim alanı" is mentioned, use SUM("uretim_alani") without GROUP BY, filtered by the extracted product name.
 - "en çok üretilen" -> SUM("uretim_miktari") with GROUP BY "urun_adi" ORDER BY SUM("uretim_miktari") DESC LIMIT 1.
 - Apply filters for category if mentioned (e.g., "meyve" -> "${catCol}" = 'Meyve').
 - Use HEAD-MATCH for the product name (e.g., "urun_adi" LIKE '%üzüm%' OR "urun_adi" LIKE '%Üzüm%').
@@ -163,7 +165,19 @@ function ruleBasedSql(nlRaw, cols, catCol) {
       LIMIT 1
     `.trim();
   }
-  // 3) "ne oldu" gibi genel sorgular için varsayılan üretim toplamı
+  // 3) "üretim" için
+  if (il && /üretim/i.test(nl)) {
+    const likeHead = urun ? `("urun_adi" LIKE '%${escapeSQL(urun)}%' OR "urun_adi" LIKE '%${escapeSQL(urun.charAt(0).toUpperCase() + urun.slice(1))}%')` : '';
+    return `
+      SELECT SUM("uretim_miktari") AS toplam_uretim
+      FROM ${TABLE}
+      WHERE "il"='${escapeSQL(il)}'
+        ${likeHead ? `AND ${likeHead}` : ''}
+        ${year ? `AND "yil"=${Number(year)}` : ''}
+        ${kat ? `AND "${catCol}"='${escapeSQL(kat)}'` : ''}
+    `.trim();
+  }
+  // 4) "ne oldu" gibi genel sorgular için varsayılan üretim toplamı
   if (il && /ne oldu/i.test(nl)) {
     const likeHead = urun ? headMatchExpr(urun) : '';
     return `
@@ -175,7 +189,7 @@ function ruleBasedSql(nlRaw, cols, catCol) {
         ${kat ? `AND "${catCol}"='${escapeSQL(kat)}'` : ''}
     `.trim();
   }
-  // 4) toplam üretim (sebze/meyve/tahıl olabilir)
+  // 5) toplam üretim (sebze/meyve/tahıl olabilir)
   if (il && (/kaç\s+ton/i.test(nl) || /toplam.*üretim/i.test(nl)) && !urun) {
     return `
       SELECT SUM("uretim_miktari") AS toplam_uretim
@@ -185,7 +199,7 @@ function ruleBasedSql(nlRaw, cols, catCol) {
         ${year ? `AND "yil"=${Number(year)}` : ''}
     `.trim();
   }
-  // 5) belli bir ürün üretimi
+  // 6) belli bir ürün üretimi
   if (il && urun && /üretim/i.test(nl)) {
     const likeHead = headMatchExpr(urun);
     return `
@@ -197,7 +211,7 @@ function ruleBasedSql(nlRaw, cols, catCol) {
         ${/sebze|meyve|tah[ıi]l/i.test(nl) ? `AND "${catCol}"='${/sebze/i.test(nl) ? 'Sebze' : /meyve/i.test(nl) ? 'Meyve' : 'Tahıl'}'` : ''}
     `.trim();
   }
-  // 6) toplam ekim alanı
+  // 7) toplam ekim alanı
   if (il && /(toplam)?.*(ekim )?alan/i.test(nl)) {
     return `
       SELECT SUM("uretim_alani") AS toplam_alan
@@ -207,7 +221,7 @@ function ruleBasedSql(nlRaw, cols, catCol) {
         ${year ? `AND "yil"=${Number(year)}` : ''}
     `.trim();
   }
-  // 7) ilde en çok üretilen N ürün
+  // 8) ilde en çok üretilen N ürün
   const topN = (nl.match(/en çok üretilen\s+(\d+)/i) || [])[1] || 10;
   if (il && /(en çok üretilen\s+\d+\s+ürün|en çok üretilen ürün)/i.test(nl)) {
     return `
@@ -221,7 +235,7 @@ function ruleBasedSql(nlRaw, cols, catCol) {
       LIMIT ${Number(topN)}
     `.trim();
   }
-  // 8) ürün en çok hangi ilçelerde?
+  // 9) ürün en çok hangi ilçelerde?
   if (il && urun && /en çok hangi ilçelerde/i.test(nl)) {
     const likeHead = headMatchExpr(urun);
     return `
@@ -235,7 +249,7 @@ function ruleBasedSql(nlRaw, cols, catCol) {
       LIMIT 10
     `.trim();
   }
-  // 9) ortalama verim
+  // 10) ortalama verim
   if (il && /verim/i.test(nl)) {
     return `
       SELECT CASE WHEN SUM("uretim_alani")>0 THEN ROUND(SUM("uretim_miktari")/SUM("uretim_alani"), 4) ELSE NULL END AS ort_verim
