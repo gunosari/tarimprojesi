@@ -88,14 +88,14 @@ Single table: ${TABLE}("${cols.join('","')}")
 - If year is not specified, aggregate all years; however, 2024 can be injected later.
 - For general product names, use HEAD-MATCH: "urun_adi" LIKE 'Xxx %' OR "urun_adi"='Xxx'.
 - If the question specifies a category (e.g., "meyve" for fruit, "tahıl" for grain), filter by "${catCol}" = 'Meyve' or equivalent.
-- For "ekim alanı", use SUM("uretim_alani").
+- For "ekim alanı", use SUM("uretim_alani") with GROUP BY "urun_adi" and ORDER BY SUM("uretim_alani") DESC LIMIT 1 to get the product with the largest area.
 - For phrases like "en çok üretilen", use SUM("uretim_miktari") with GROUP BY "urun_adi" and ORDER BY "Toplam Üretim" DESC LIMIT 1.
 - For "hangi ilçelerde", group by district.
 - Return a SINGLE SELECT statement and ONLY SQL. Use double-quotes for column names.
   `.trim();
   const user = `
 Question: """${nl}"""
-- "ekim alanı" -> SUM("uretim_alani").
+- "ekim alanı" -> SUM("uretim_alani") with GROUP BY "urun_adi" ORDER BY SUM("uretim_alani") DESC LIMIT 1.
 - "en çok üretilen" -> SUM("uretim_miktari") with GROUP BY "urun_adi" ORDER BY SUM("uretim_miktari") DESC LIMIT 1.
 - Apply filters for category if mentioned (e.g., "meyve" -> "${catCol}" = 'Meyve').
 - Table name: ${TABLE}.
