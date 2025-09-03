@@ -83,16 +83,16 @@ Single table: ${TABLE}("${cols.join('","')}")
 - Category/variety column: "${catCol}" (if exists).
 - If year is not specified, aggregate all years; however, 2024 can be injected later.
 - For general product names, use HEAD-MATCH: "Ürün" LIKE 'Xxx %' OR "Ürün"='Xxx'.
-- For phrases like "ne oldu", "kaç ton", "toplam", "alan", use SUM("Üretim"), SUM("Alan"), or yield (SUM("Üretim")/SUM("Alan")) as appropriate.
-- If "hangi ilçelerde" is present, group by district.
+- If the question specifies a category (e.g., "meyve" for fruit, "tahıl" for grain), filter by "${catCol}" = 'Meyve' or equivalent.
+- For phrases like "en çok üretilen", use SUM("Üretim") with GROUP BY "Ürün" and ORDER BY "Toplam Üretim" DESC LIMIT 1.
+- For "hangi ilçelerde", group by district.
 - Return a SINGLE SELECT statement and ONLY SQL. Use double-quotes for column names.
   `.trim();
   const user = `
 Question: """${nl}"""
-- "kaç ton/toplam" -> SUM("Üretim"), "alan" -> SUM("Alan"), "verim" -> SUM("Üretim")/SUM("Alan").
-- Apply GROUP BY / ORDER BY / LIMIT when needed.
+- "en çok üretilen" -> SUM("Üretim") with GROUP BY "Ürün" ORDER BY SUM("Üretim") DESC LIMIT 1.
+- Apply filters for category if mentioned (e.g., "meyve" -> "${catCol}" = 'Meyve').
 - Table name: ${TABLE}.
-- For ambiguous questions (e.g., "ne oldu"), default to SUM("Üretim") with relevant filters (il, product, year).
   `.trim();
   const r = await openai.chat.completions.create({
     model: MODEL,
@@ -124,10 +124,25 @@ function ruleBasedSql(nlRaw, cols, catCol) {
   urun = (urun || '').replace(/["'’`´]+/g,'').trim();
   // Kategori/çeşit (metinden)
   let kat = '';
-  if (/sebze/i.test(nl)) kat = 'Sebze';
-  else if (/meyve/i.test(nl)) kat = 'Meyve';
+  if (/meyve/i.test(nl)) kat = 'Meyve';
   else if (/tah[ıi]l/i.test(nl)) kat = 'Tahıl';
-  // 1) "ne oldu" gibi genel sorgular için varsayılan üretim toplamı
+  else if (/sebze/i.test(nl)) kat = 'Sebze';
+  // 1) "en çok üretilen" için kategori filtresi
+  if (il && /en çok üretilen/i.test(nl)) {
+    const likeHead = urun ? headMatchExpr(urun) : '';
+    return `
+      SELECT "Ürün" AS urun, SUM("Üretim") AS toplam_uretim
+      FROM ${TABLE}
+      WHERE "İl"='${escapeSQL(il)}'
+        ${kat ? `AND "${catCol}"='${escapeSQL(kat)}'` : ''}
+        ${likeHead ? `AND ${likeHead}` : ''}
+        ${year ? `AND "Yıl"=${Number(year)}` : ''}
+      GROUP BY "Ürün"
+      ORDER BY toplam_uretim DESC
+      LIMIT 1
+    `.trim();
+  }
+  // 2) "ne oldu" gibi genel sorgular için varsayılan üretim toplamı
   if (il && /ne oldu/i.test(nl)) {
     const likeHead = urun ? headMatchExpr(urun) : '';
     return `
@@ -139,7 +154,7 @@ function ruleBasedSql(nlRaw, cols, catCol) {
         ${kat ? `AND "${catCol}"='${escapeSQL(kat)}'` : ''}
     `.trim();
   }
-  // 2) toplam üretim (sebze/meyve/tahıl olabilir)
+  // 3) toplam üretim (sebze/meyve/tahıl olabilir)
   if (il && (/kaç\s+ton/i.test(nl) || /toplam.*üretim/i.test(nl)) && !urun) {
     return `
       SELECT SUM("Üretim") AS toplam_uretim
@@ -149,7 +164,7 @@ function ruleBasedSql(nlRaw, cols, catCol) {
         ${year ? `AND "Yıl"=${Number(year)}` : ''}
     `.trim();
   }
-  // 3) belli bir ürün üretimi
+  // 4) belli bir ürün üretimi
   if (il && urun && /üretim/i.test(nl)) {
     const likeHead = headMatchExpr(urun);
     return `
@@ -161,7 +176,7 @@ function ruleBasedSql(nlRaw, cols, catCol) {
         ${/sebze|meyve|tah[ıi]l/i.test(nl) ? `AND "${catCol}"='${/sebze/i.test(nl) ? 'Sebze' : /meyve/i.test(nl) ? 'Meyve' : 'Tahıl'}'` : ''}
     `.trim();
   }
-  // 4) toplam ekim alanı
+  // 5) toplam ekim alanı
   if (il && /(toplam)?.*(ekim )?alan/i.test(nl)) {
     return `
       SELECT SUM("Alan") AS toplam_alan
@@ -171,7 +186,7 @@ function ruleBasedSql(nlRaw, cols, catCol) {
         ${year ? `AND "Yıl"=${Number(year)}` : ''}
     `.trim();
   }
-  // 5) ilde en çok üretilen N ürün
+  // 6) ilde en çok üretilen N ürün
   const topN = (nl.match(/en çok üretilen\s+(\d+)/i) || [])[1] || 10;
   if (il && /(en çok üretilen\s+\d+\s+ürün|en çok üretilen ürün)/i.test(nl)) {
     return `
@@ -185,7 +200,7 @@ function ruleBasedSql(nlRaw, cols, catCol) {
       LIMIT ${Number(topN)}
     `.trim();
   }
-  // 6) ürün en çok hangi ilçelerde?
+  // 7) ürün en çok hangi ilçelerde?
   if (il && urun && /en çok hangi ilçelerde/i.test(nl)) {
     const likeHead = headMatchExpr(urun);
     return `
@@ -199,7 +214,7 @@ function ruleBasedSql(nlRaw, cols, catCol) {
       LIMIT 10
     `.trim();
   }
-  // 7) ortalama verim
+  // 8) ortalama verim
   if (il && /verim/i.test(nl)) {
     return `
       SELECT CASE WHEN SUM("Alan")>0 THEN ROUND(SUM("Üretim")/SUM("Alan"), 4) ELSE NULL END AS ort_verim
@@ -222,8 +237,8 @@ async function prettyAnswer(question, rows) {
   const r = await openai.chat.completions.create({
     model: MODEL,
     messages: [
-      { role: 'system', content: 'Kısa ve net Türkçe cevap ver. Sayıları binlik ayırıcıyla yaz.' },
-      { role: 'user', content: `Soru: ${question}\nÖrnek veri: ${JSON.stringify(sample)}\nToplam satır: ${rows.length}\n1-2 cümle özet yaz.` }
+      { role: 'system', content: 'Kısa ve net Türkçe cevap ver. Sayıları binlik ayırıcıyla yaz. Sadece verilen verilere dayan, varsayım yapma.' },
+      { role: 'user', content: `Soru: ${question}\nÖrnek veri: ${JSON.stringify(sample)}\nToplam satır: ${rows.length}\n1-2 cümle özet yaz, yıl olarak sadece SQL'deki yılı kullan.` }
     ],
   });
   return (r.choices[0].message.content || '').trim();
