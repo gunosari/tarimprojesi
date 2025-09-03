@@ -86,7 +86,7 @@ Single table: ${TABLE}("${cols.join('","')}")
 - "uretim_miktari": tons, "uretim_alani": decares, "yil": integer, "verim": tons/decares.
 - Category/variety column: "${catCol}" (if exists).
 - If year is not specified, aggregate all years; however, 2024 can be injected later.
-- For general product names, use HEAD-MATCH: "urun_adi" LIKE 'Xxx %' OR "urun_adi"='Xxx'.
+- For general product names (e.g., "üzüm"), use HEAD-MATCH: "urun_adi" LIKE '%üzüm%' OR "urun_adi" LIKE '%Üzüm%' to include all variants (e.g., "Sofralık Üzüm", "Şaraplık Üzüm").
 - If the question specifies a category (e.g., "meyve" for fruit, "tahıl" for grain), filter by "${catCol}" = 'Meyve' or equivalent.
 - For "ekim alanı", use SUM("uretim_alani") with GROUP BY "urun_adi" and ORDER BY SUM("uretim_alani") DESC LIMIT 1 to get the product with the largest area.
 - For phrases like "en çok üretilen", use SUM("uretim_miktari") with GROUP BY "urun_adi" and ORDER BY "Toplam Üretim" DESC LIMIT 1.
@@ -98,6 +98,7 @@ Question: """${nl}"""
 - "ekim alanı" -> SUM("uretim_alani") with GROUP BY "urun_adi" ORDER BY SUM("uretim_alani") DESC LIMIT 1.
 - "en çok üretilen" -> SUM("uretim_miktari") with GROUP BY "urun_adi" ORDER BY SUM("uretim_miktari") DESC LIMIT 1.
 - Apply filters for category if mentioned (e.g., "meyve" -> "${catCol}" = 'Meyve').
+- For product names like "üzüm", ensure all variants are included (e.g., "urun_adi" LIKE '%üzüm%' OR "urun_adi" LIKE '%Üzüm%').
 - Table name: ${TABLE}.
   `.trim();
   const r = await openai.chat.completions.create({
