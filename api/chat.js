@@ -109,12 +109,9 @@ Question: """${nl}"""
 /** ======= Kural Tabanlı Yedek ======= **/
 function ruleBasedSql(nlRaw, cols, catCol) {
   const nl = String(nlRaw || '').trim();
-  // İl
   const mIl = nl.match(/([A-ZÇĞİÖŞÜ][a-zçğıöşü]+)(?:[’'`´]?[dt]e|[’'`´]?[dt]a|\s|$)/);
   const il = mIl ? mIl[1] : '';
-  // Yıl (yine de ekleyelim; oto-yıl ayrıca enjekte edilecek)
   const year = (nl.match(/\b(19\d{2}|20\d{2})\b/) || [])[1] || '';
-  // Ürün adayını çıkar
   const known = /(domates|biber|patlıcan|kabak|hıyar|salatalık|karpuz|karnabahar|lahana|marul|fasulye|soğan|sarımsak|patates|brokoli|ispanak|maydanoz|enginar|bezelye|bakla|elma|portakal|mandalina|limon|muz|zeytin|üzüm|armut|şeftali|kayısı|nar|incir|vişne|çilek|kiraz|kavun|ayva|fındık|ceviz|antep fıstığı|buğday|arpa|mısır|çeltik|pirinç|yulaf|çavdar|ayçiçeği|kanola)/i;
   let urun = (nl.match(known) || [])[1] || '';
   if (!urun) {
@@ -122,11 +119,11 @@ function ruleBasedSql(nlRaw, cols, catCol) {
     if (mu) urun = mu[1];
   }
   urun = (urun || '').replace(/["'’`´]+/g,'').trim();
-  // Kategori/çeşit (metinden)
   let kat = '';
   if (/meyve/i.test(nl)) kat = 'Meyve';
   else if (/tah[ıi]l/i.test(nl)) kat = 'Tahıl';
   else if (/sebze/i.test(nl)) kat = 'Sebze';
+
   // 1) "en çok üretilen" için kategori filtresi
   if (il && /en çok üretilen/i.test(nl)) {
     const likeHead = urun ? headMatchExpr(urun) : '';
@@ -281,7 +278,7 @@ export default async function handler(req, res) {
       `);
       const rows = [];
       stmt.bind([ilInput]);
-      while (stmt.step()) rows.push(stmt.getAsObject());
+      while (stmt.step()) rows.push(st.getAsObject());
       stmt.free();
       const text = qToText(rows, r => `• ${r.ilce}: ${r.uretim} ton, ${r.alan} dekar`);
       res.setHeader('Content-Type', 'text/plain; charset=utf-8');
