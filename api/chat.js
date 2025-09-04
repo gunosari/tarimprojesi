@@ -99,21 +99,29 @@ function makeIsSafeSql(allowedNames) {
 /** ======= GPT Katmanı ======= **/
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-// *** DÜZELTİLMİŞ ÜRÜN EŞLEŞME FONKSİYONU ***
+// *** SON DÜZELTİLMİŞ ÜRÜN EŞLEŞME FONKSİYONU ***
 function headMatchExpr(raw, urunCol = 'urun_adi') {
   const product = String(raw || '').trim().toLowerCase();
   
-  // TÜİK'te çok çeşitli olan ürünler - geniş arama yap
+  // TÜİK'te çeşitlendirilen ürünlerin tam listesi (Excel'den çıkarılan)
   const multiVarietyProducts = [
-    'üzüm', 'elma', 'portakal', 'mandalina', 'domates', 'biber', 
-    'marul', 'lahana', 'zeytin', 'limon', 'kavun', 'karpuz',
-    'salatalık', 'hıyar', 'fasulye', 'soğan', 'patates'
+    // Sebzeler
+    'biber', 'domates', 'hıyar', 'kabak', 'lahana', 'marul', 'soğan', 'sarımsak', 
+    'turp', 'kereviz',
+    // Meyveler  
+    'elma', 'portakal', 'mandalina', 'üzüm',
+    // Baklagiller
+    'fasulye', 'bakla', 'bezelye', 'börülce', 'mercimek',
+    // Tahıllar
+    'mısır', 'arpa', 'yulaf', 'çavdar',
+    // Diğer önemli çeşitli ürünler
+    'pamuk', 'ayçiçeği', 'şeker', 'fiğ', 'yonca', 'haşhaş'
   ];
   
-  // Eğer çok çeşitli bir ürünse, geniş arama (tüm çeşitlerini bul)
+  // Eğer çok çeşitli bir ürünse, hibrit arama (başta + içinde)
   if (multiVarietyProducts.includes(product)) {
     const productCapitalized = product.charAt(0).toUpperCase() + product.slice(1);
-    return `"${urunCol}" LIKE '%${escapeSQL(productCapitalized)}%'`;
+    return `("${urunCol}" LIKE '${escapeSQL(productCapitalized)} %' OR "${urunCol}" LIKE '%${escapeSQL(productCapitalized)}%')`;
   }
   
   // Diğer ürünler için dar arama (eski sistem)
@@ -169,12 +177,14 @@ KURALLAR:
 1. Yıl belirtilmemişse tüm yılları topla; sonra 2024 enjekte edilecek
 2. Genel ürün isimleri için (örn: "üzüm") TÜM ÇEŞİTLERİNİ dahil et: ("${urunCol}" LIKE 'Üzüm %' OR "${urunCol}" LIKE '%Üzüm%')
 3. "Türkiye" deyince TÜM İLLERİ topla, il filtresi koyma
-4. Kategori belirtilmişse (meyve/sebze/tahıl) "${catCol}" = 'Meyve' filtresi ekle
-5. "ekim alanı" için SUM("${alanCol}") kullan
-6. "en çok üretilen" için SUM("${uretimCol}") ile GROUP BY ve ORDER BY
-7. "hangi ilçelerde" için "${ilceCol}" ile GROUP BY
-8. Tek SELECT sorgusu üret, noktalı virgül yok
-9. Kolon isimlerini çift tırnak ile: "${ilCol}", "${urunCol}"
+4. "Mersin" = "Mersin ili" = "Mersin ilinde" (hepsi aynı anlam)
+5. Kategori belirtilmişse (meyve/sebze/tahıl) "${catCol}" = 'Meyve' filtresi ekle
+6. "ekim alanı" için SUM("${alanCol}") kullan
+7. "en çok üretilen" için SUM("${uretimCol}") ile GROUP BY ve ORDER BY
+8. "hangi ilçelerde" için "${ilceCol}" ile GROUP BY
+9. Tek SELECT sorgusu üret, noktalı virgül yok
+10. Kolon isimlerini çift tırnak ile: "${ilCol}", "${urunCol}"
+11. MUTLAKA SUM() kullan, tek satır değerleri değil toplamları ver
   `.trim();
 
   const user = `Soru: """${nl}"""
@@ -222,9 +232,13 @@ function ruleBasedSql(nlRaw, schema) {
   const uretimCol = columns.find(c => ['uretim_miktari', 'uretim', 'Üretim', 'production'].includes(c)) || 'uretim_miktari';
   const alanCol = columns.find(c => ['uretim_alani', 'alan', 'Alan', 'area'].includes(c)) || 'uretim_alani';
   
-  // İl tespit et
-  const mIl = nl.match(/([A-ZÇĞİÖŞÜ][a-zçğıöşü]+)(?:[''`´]?[dt]e|[''`´]?[dt]a|\s|$)/);
-  const il = mIl ? mIl[1] : '';
+  // İl tespit et - "Mersin ili", "Mersin'de", "Mersinde" hepsini "Mersin" olarak al
+  let il = '';
+  const ilPattern = /([A-ZÇĞİÖŞÜ][a-zçğıöşü]+)(?:\s+il[inde]*|[''`´]?[dt]e|[''`´]?[dt]a|\s|$)/;
+  const mIl = nl.match(ilPattern);
+  if (mIl) {
+    il = mIl[1];
+  }
   
   // Yıl tespit et
   const year = (nl.match(/\b(19\d{2}|20\d{2})\b/) || [])[1] || '';
@@ -248,103 +262,20 @@ function ruleBasedSql(nlRaw, schema) {
   const yearFilter = year ? `AND "${yilCol}"=${Number(year)}` : '';
   const catFilter = (kat && catCol) ? `AND "${catCol}"='${escapeSQL(kat)}'` : '';
   
-  // 1) "en çok üretilen" sorgular
-  if (il && /en çok üretilen/i.test(nl)) {
-    const likeHead = urun ? headMatchExpr(urun, urunCol) : '';
-    const limit = (nl.match(/(\d+)/) || ['', '5'])[1];
-    
-    return `
-      SELECT "${urunCol}" AS urun, SUM("${uretimCol}") AS toplam_uretim
-      FROM ${TABLE}
-      WHERE "${ilCol}"='${escapeSQL(il)}'
-        ${catFilter}
-        ${likeHead ? `AND ${likeHead}` : ''}
-        ${yearFilter}
-      GROUP BY "${urunCol}"
-      ORDER BY toplam_uretim DESC
-      LIMIT ${limit}
-    `.trim().replace(/\s+/g, ' ');
-  }
-  
-  // 2) "ekim alanı" sorgular
-  if (il && /(ekim )?alan/i.test(nl)) {
-    if (urun) {
-      const likeHead = headMatchExpr(urun, urunCol);
-      return `
-        SELECT "${urunCol}" AS urun, SUM("${alanCol}") AS toplam_alan
-        FROM ${TABLE}
-        WHERE "${ilCol}"='${escapeSQL(il)}'
-          AND ${likeHead}
-          ${yearFilter}
-          ${catFilter}
-        GROUP BY "${urunCol}"
-        ORDER BY toplam_alan DESC
-        LIMIT 1
-      `.trim().replace(/\s+/g, ' ');
-    } else {
-      return `
-        SELECT SUM("${alanCol}") AS toplam_alan
-        FROM ${TABLE}
-        WHERE "${ilCol}"='${escapeSQL(il)}'
-          ${catFilter}
-          ${yearFilter}
-      `.trim().replace(/\s+/g, ' ');
-    }
-  }
-  
-  // 3) Üretim miktarı sorgular
-  if (il && (/kaç\s+ton/i.test(nl) || /üretim/i.test(nl))) {
-    if (urun) {
-      const likeHead = headMatchExpr(urun, urunCol);
-      return `
-        SELECT SUM("${uretimCol}") AS toplam_uretim
-        FROM ${TABLE}
-        WHERE "${ilCol}"='${escapeSQL(il)}'
-          AND ${likeHead}
-          ${yearFilter}
-          ${catFilter}
-      `.trim().replace(/\s+/g, ' ');
-    } else if (kat) {
-      return `
-        SELECT SUM("${uretimCol}") AS toplam_uretim
-        FROM ${TABLE}
-        WHERE "${ilCol}"='${escapeSQL(il)}'
-          ${catFilter}
-          ${yearFilter}
-      `.trim().replace(/\s+/g, ' ');
-    }
-  }
-  
-  // 4) "hangi ilçelerde" sorgular
-  if (il && urun && /hangi ilçelerde/i.test(nl)) {
+  // Basit toplam üretim sorgusu (en yaygın)
+  if (il && urun && /üretim/i.test(nl)) {
     const likeHead = headMatchExpr(urun, urunCol);
     return `
-      SELECT "${ilceCol}" AS ilce, SUM("${uretimCol}") AS uretim, SUM("${alanCol}") AS alan
+      SELECT SUM("${uretimCol}") AS toplam_uretim, SUM("${alanCol}") AS toplam_alan
       FROM ${TABLE}
       WHERE "${ilCol}"='${escapeSQL(il)}'
         AND ${likeHead}
         ${yearFilter}
-      GROUP BY "${ilceCol}"
-      ORDER BY uretim DESC
-      LIMIT 10
-    `.trim().replace(/\s+/g, ' ');
-  }
-  
-  // 5) Genel il-ürün top listesi
-  if (il) {
-    const limit = (nl.match(/(\d+)/) || ['', '10'])[1];
-    return `
-      SELECT "${urunCol}" AS urun, SUM("${uretimCol}") AS uretim, SUM("${alanCol}") AS alan
-      FROM ${TABLE}
-      WHERE "${ilCol}"='${escapeSQL(il)}'
         ${catFilter}
-        ${yearFilter}
-      GROUP BY "${urunCol}"
-      ORDER BY uretim DESC
-      LIMIT ${limit}
     `.trim().replace(/\s+/g, ' ');
   }
   
+  // Diğer kural sorgularını da ekle...
   return '';
 }
 
@@ -385,6 +316,31 @@ async function prettyAnswer(question, rows) {
   } catch (e) {
     console.error('Özet oluşturma hatası:', e);
     return `${rows.length} sonuç bulundu.`;
+  }
+}
+
+// DEBUG: Manuel SQL testi fonksiyonu
+function debugManualSQL(db, il, urun) {
+  try {
+    const sql = `SELECT "${urunCol}" AS urun_adi, "${uretimCol}" AS uretim_miktari 
+                 FROM ${TABLE} 
+                 WHERE "il"='${il}' AND "urun_adi" LIKE '%${urun}%'`;
+    
+    console.log('DEBUG Manuel SQL:', sql);
+    
+    const stmt = db.prepare(sql);
+    const results = [];
+    while (stmt.step()) results.push(stmt.getAsObject());
+    stmt.free();
+    
+    const toplam = results.reduce((sum, row) => sum + (row.uretim_miktari || 0), 0);
+    console.log('DEBUG Manuel Toplam:', toplam);
+    console.log('DEBUG Detay Satırlar:', results);
+    
+    return { results, toplam };
+  } catch (e) {
+    console.error('DEBUG Manuel SQL Hatası:', e);
+    return null;
   }
 }
 
@@ -432,34 +388,13 @@ export default async function handler(req, res) {
     const schema = getColumns(SQL, db);
     const isSafeSql = makeIsSafeSql([TABLE, ...schema.columns.map(c => `"${c}"`)]);
     
-    // Kısa yol: "İl, Ürün" -> ilçe top10
-    if (raw.includes(',')) {
-      const [ilInput, urunInput] = raw.split(',').map(s => s.trim());
-      const urunCol = schema.columns.find(c => ['urun_adi', 'urun', 'Ürün'].includes(c)) || 'urun_adi';
-      const ilceCol = schema.columns.find(c => ['ilce', 'İlçe'].includes(c)) || 'ilce';
-      const uretimCol = schema.columns.find(c => ['uretim_miktari', 'uretim'].includes(c)) || 'uretim_miktari';
-      const alanCol = schema.columns.find(c => ['uretim_alani', 'alan'].includes(c)) || 'uretim_alani';
-      
-      const sql = `
-        SELECT "${ilceCol}" AS ilce, SUM("${uretimCol}") AS uretim, SUM("${alanCol}") AS alan
-        FROM ${TABLE}
-        WHERE "il" = ? AND ${headMatchExpr(urunInput, urunCol)}
-        GROUP BY "${ilceCol}"
-        ORDER BY uretim DESC
-        LIMIT 10
-      `;
-      
-      const stmt = db.prepare(sql);
-      const rows = [];
-      stmt.bind([ilInput]);
-      while (stmt.step()) rows.push(stmt.getAsObject());
-      stmt.free();
-      
-      const text = qToText(rows, r => `• ${r.ilce}: ${Number(r.uretim || 0).toLocaleString('tr-TR')} ton, ${Number(r.alan || 0).toLocaleString('tr-TR')} dekar`);
-      
-      res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-      res.status(200).send(`🧭 Mod: il_urun_ilce_top\nİl: ${ilInput} | Ürün: ${urunInput}\n\n${text}`);
-      return;
+    // *** DEBUG: Manuel kontrol ekle ***
+    if (raw.toLowerCase().includes('mersin') && raw.toLowerCase().includes('lahana')) {
+      const debugResult = debugManualSQL(db, 'Mersin', 'Lahana');
+      if (debugResult) {
+        console.log('=== MANUEL KONTROL ===');
+        console.log('Toplam üretim:', debugResult.toplam);
+      }
     }
     
     // 1) GPT ile dene
@@ -489,35 +424,8 @@ export default async function handler(req, res) {
     
     // 3) Hala SQL yok -> genel fallback
     if (!sql) {
-      const ilInput = raw;
-      const urunCol = schema.columns.find(c => ['urun_adi', 'urun'].includes(c)) || 'urun_adi';
-      const uretimCol = schema.columns.find(c => ['uretim_miktari', 'uretim'].includes(c)) || 'uretim_miktari';
-      const alanCol = schema.columns.find(c => ['uretim_alani', 'alan'].includes(c)) || 'uretim_alani';
-      const yilCol = schema.columns.find(c => ['yil', 'Yıl'].includes(c)) || 'yil';
-      
-      let fallbackSql = `
-        SELECT "${urunCol}" AS urun, SUM("${uretimCol}") AS uretim, SUM("${alanCol}") AS alan
-        FROM ${TABLE}
-        WHERE "il" = ?
-        GROUP BY "${urunCol}"
-        ORDER BY uretim DESC
-        LIMIT 10
-      `;
-      
-      fallbackSql = AUTO_INJECT_DEFAULT_YEAR ? 
-        fallbackSql.replace('WHERE "il" = ?', `WHERE "${yilCol}"=${DEFAULT_YEAR} AND "il" = ?`) : 
-        fallbackSql;
-      
-      const rows = [];
-      const stmt = db.prepare(fallbackSql);
-      stmt.bind([ilInput]);
-      while (stmt.step()) rows.push(stmt.getAsObject());
-      stmt.free();
-      
-      const text = qToText(rows, r => `• ${r.urun?.trim?.()}: ${Number(r.uretim || 0).toLocaleString('tr-TR')} ton, ${Number(r.alan || 0).toLocaleString('tr-TR')} dekar`);
-      
       res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-      res.status(200).send(`🧭 Mod: fallback_il_top_urun\nİl: ${ilInput}\n\n${text}`);
+      res.status(400).send('SQL oluşturulamadı. Sorunuzu yeniden formüle edin.');
       return;
     }
     
