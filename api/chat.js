@@ -175,7 +175,10 @@ KOLON AÇIKLAMALARI:
 
 KURALLAR:
 1. Yıl belirtilmemişse tüm yılları topla; sonra 2024 enjekte edilecek
-2. Genel ürün isimleri için (örn: "üzüm") TÜM ÇEŞİTLERİNİ dahil et: ("${urunCol}" LIKE 'Üzüm %' OR "${urunCol}" LIKE '%Üzüm%')
+2. Genel ürün isimleri için ÖRNEKTEKİ GİBİ tam eşleştirme kullan:
+   - "mısır" için: ("${urunCol}" LIKE 'Mısır %' OR "${urunCol}" LIKE '%Mısır%')
+   - "domates" için: ("${urunCol}" LIKE 'Domates %' OR "${urunCol}" LIKE '%Domates%')
+   - "biber" için: ("${urunCol}" LIKE 'Biber %' OR "${urunCol}" LIKE '%Biber%')
 3. "Türkiye" deyince TÜM İLLERİ topla, il filtresi koyma
 4. "Mersin" = "Mersin ili" = "Mersin ilinde" (hepsi aynı anlam)
 5. Kategori belirtilmişse (meyve/sebze/tahıl) "${catCol}" = 'Meyve' filtresi ekle
@@ -185,6 +188,7 @@ KURALLAR:
 9. Tek SELECT sorgusu üret, noktalı virgül yok
 10. Kolon isimlerini çift tırnak ile: "${ilCol}", "${urunCol}"
 11. MUTLAKA SUM() kullan, tek satır değerleri değil toplamları ver
+12. ÜRÜN FİLTRELEMESİNDE = operatörü KULLANMA, sadece LIKE kullan
   `.trim();
 
   const user = `Soru: """${nl}"""
@@ -208,10 +212,26 @@ Ana kolonlar: "${ilCol}", "${ilceCol}", "${urunCol}", "${yilCol}", "${uretimCol}
       .trim()
       .replace(/;+\s*$/,'');
     
-    // Post-processing
-    sql = sql.replace(new RegExp(`"${urunCol}"\\s*=\\s*'([^']+)'`, 'gi'), (_m, val) => headMatchExpr(val, urunCol));
+    // *** DÜZELTİLMİŞ POST-PROCESSING ***
+    // Hem = hem de LIKE durumlarını yakala
+    sql = sql.replace(new RegExp(`"${urunCol}"\\s*(=|LIKE)\\s*'([^']+)'`, 'gi'), 
+      (match, operator, val) => {
+        console.log(`Post-processing ${operator} durumu yakalandı: ${val}`);
+        return headMatchExpr(val, urunCol);
+      });
+    
+    // Basit LIKE pattern'lerini de değiştir (örn: 'Mısır%' -> hibrit arama)
+    sql = sql.replace(new RegExp(`"${urunCol}"\\s+LIKE\\s+'([^']+)%?'`, 'gi'), 
+      (match, val) => {
+        console.log(`LIKE pattern yakalandı: ${val}`);
+        // % işaretini kaldır
+        const cleanVal = val.replace(/%+$/, '');
+        return headMatchExpr(cleanVal, urunCol);
+      });
+    
     sql = autoYear(sql, yilCol);
     
+    console.log('Post-processing sonrası SQL:', sql);
     return sql;
   } catch (e) {
     console.error('GPT hatası:', e);
@@ -320,7 +340,7 @@ async function prettyAnswer(question, rows) {
 }
 
 // DEBUG: Manuel SQL testi fonksiyonu
-function debugManualSQL(db, il, urun) {
+function debugManualSQL(db, il, urun, urunCol = 'urun_adi', TABLE = 'urunler', uretimCol = 'uretim_miktari') {
   try {
     const sql = `SELECT "${urunCol}" AS urun_adi, "${uretimCol}" AS uretim_miktari 
                  FROM ${TABLE} 
@@ -389,10 +409,15 @@ export default async function handler(req, res) {
     const isSafeSql = makeIsSafeSql([TABLE, ...schema.columns.map(c => `"${c}"`)]);
     
     // *** DEBUG: Manuel kontrol ekle ***
-    if (raw.toLowerCase().includes('mersin') && raw.toLowerCase().includes('lahana')) {
-      const debugResult = debugManualSQL(db, 'Mersin', 'Lahana');
+    if (raw.toLowerCase().includes('mısır')) {
+      const debugResult = debugManualSQL(db, raw.includes('dana') ? 'Adana' : 'Mersin', 'Mısır', 
+        schema.columns.find(c => ['urun_adi', 'urun', 'Ürün'].includes(c)) || 'urun_adi',
+        TABLE,
+        schema.columns.find(c => ['uretim_miktari', 'uretim'].includes(c)) || 'uretim_miktari'
+      );
       if (debugResult) {
-        console.log('=== MANUEL KONTROL ===');
+        console.log('=== MANUEL MÍSIR KONTROL ===');
+        console.log('Bulunan mısır ürünleri:', debugResult.results.map(r => r.urun_adi));
         console.log('Toplam üretim:', debugResult.toplam);
       }
     }
