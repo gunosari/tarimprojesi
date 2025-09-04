@@ -454,6 +454,8 @@ export default async function handler(req, res) {
     }
     
     // *** ÖNCELİK: Yaygın sorgular için ÖNCE kural tabanlı dene ***
+    let used = '', gptErr = '', sql = '';
+    
     const rb = ruleBasedSql(raw, schema);
     if (rb && isSafeSql(rb)) { 
       sql = rb; 
