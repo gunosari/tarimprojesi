@@ -167,13 +167,14 @@ KOLON AÇIKLAMALARI:
 
 KURALLAR:
 1. Yıl belirtilmemişse tüm yılları topla; sonra 2024 enjekte edilecek
-2. Genel ürün isimleri için (örn: "üzüm") TÜM ÇEŞİTLERİNİ dahil et: "${urunCol}" LIKE '%Üzüm%'
-3. Kategori belirtilmişse (meyve/sebze/tahıl) "${catCol}" = 'Meyve' filtresi ekle
-4. "ekim alanı" için SUM("${alanCol}") kullan
-5. "en çok üretilen" için SUM("${uretimCol}") ile GROUP BY ve ORDER BY
-6. "hangi ilçelerde" için "${ilceCol}" ile GROUP BY
-7. Tek SELECT sorgusu üret, noktalı virgül yok
-8. Kolon isimlerini çift tırnak ile: "${ilCol}", "${urunCol}"
+2. Genel ürün isimleri için (örn: "üzüm") TÜM ÇEŞİTLERİNİ dahil et: ("${urunCol}" LIKE 'Üzüm %' OR "${urunCol}" LIKE '%Üzüm%')
+3. "Türkiye" deyince TÜM İLLERİ topla, il filtresi koyma
+4. Kategori belirtilmişse (meyve/sebze/tahıl) "${catCol}" = 'Meyve' filtresi ekle
+5. "ekim alanı" için SUM("${alanCol}") kullan
+6. "en çok üretilen" için SUM("${uretimCol}") ile GROUP BY ve ORDER BY
+7. "hangi ilçelerde" için "${ilceCol}" ile GROUP BY
+8. Tek SELECT sorgusu üret, noktalı virgül yok
+9. Kolon isimlerini çift tırnak ile: "${ilCol}", "${urunCol}"
   `.trim();
 
   const user = `Soru: """${nl}"""
