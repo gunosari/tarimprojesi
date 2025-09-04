@@ -232,7 +232,14 @@ function ruleBasedSql(nlRaw, schema) {
   const uretimCol = columns.find(c => ['uretim_miktari', 'uretim', 'Üretim', 'production'].includes(c)) || 'uretim_miktari';
   const alanCol = columns.find(c => ['uretim_alani', 'alan', 'Alan', 'area'].includes(c)) || 'uretim_alani';
   
-  // İl tespit et - "Mersin ili", "Mersin'de", "Mersinde" hepsini "Mersin" olarak al
+  // Çok çeşitli ürünlerin listesi
+  const multiVarietyProducts = [
+    'biber', 'domates', 'hıyar', 'kabak', 'lahana', 'marul', 'soğan', 'sarımsak', 
+    'turp', 'kereviz', 'elma', 'portakal', 'mandalina', 'üzüm', 'fasulye', 'bakla', 
+    'bezelye', 'börülce', 'mercimek', 'mısır', 'arpa', 'yulaf', 'çavdar'
+  ];
+  
+  // İl tespit et
   let il = '';
   const ilPattern = /([A-ZÇĞİÖŞÜ][a-zçğıöşü]+)(?:\s+il[inde]*|[''`´]?[dt]e|[''`´]?[dt]a|\s|$)/;
   const mIl = nl.match(ilPattern);
@@ -243,9 +250,21 @@ function ruleBasedSql(nlRaw, schema) {
   // Yıl tespit et
   const year = (nl.match(/\b(19\d{2}|20\d{2})\b/) || [])[1] || '';
   
-  // Ürün tespit et
+  // Ürün tespit et - hem bilinen pattern'dan hem de kelime kelime
   const known = /(domates|biber|patlıcan|kabak|hıyar|salatalık|karpuz|karnabahar|lahana|marul|fasulye|soğan|sarımsak|patates|brokoli|ispanak|maydanoz|enginar|bezelye|bakla|elma|portakal|mandalina|limon|muz|zeytin|üzüm|armut|şeftali|kayısı|nar|incir|vişne|çilek|kiraz|kavun|ayva|fındık|ceviz|antep fıstığı|buğday|arpa|mısır|çeltik|pirinç|yulaf|çavdar|ayçiçeği|kanola)/i;
   let urun = (nl.match(known) || [])[1] || '';
+  
+  // Eğer bulunamadıysa, cümleyi kelime kelime kontrol et
+  if (!urun) {
+    const words = nl.split(/\s+/);
+    for (const word of words) {
+      const cleanWord = word.toLowerCase().replace(/[''`´,\.!?]/g, '');
+      if (multiVarietyProducts.includes(cleanWord)) {
+        urun = cleanWord;
+        break;
+      }
+    }
+  }
   
   if (!urun) {
     const mu = nl.match(/([a-zçğıöşü]{3,})\s*(?:ürünü|ürün)?\s*üretimi/i);
@@ -397,28 +416,26 @@ export default async function handler(req, res) {
       }
     }
     
-    // 1) GPT ile dene
-    let used = 'nl2sql-gpt', gptErr = '', sql = '';
+    // *** ÖNCELİK: Yaygın sorgular için ÖNCE kural tabanlı dene ***
+    let used = '', gptErr = '', sql = '';
     
-    try {
-      sql = await nlToSql_gpt(raw, schema);
-    } catch (e) {
-      gptErr = `${e?.status || e?.code || ''} ${e?.message || String(e)}`;
-      used = 'fallback-rules';
-    }
-    
-    // 2) Güvenli değilse kural tabanlı
-    if (!sql || !isSafeSql(sql)) {
-      if (FORCE_GPT_ONLY) {
-        res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-        res.status(200).send(`🧭 Mod: gpt-only | GPT SQL geçersiz/boş\nSQL:\n${sql || '(yok)'}`);
-        return;
-      }
-      
-      const rb = ruleBasedSql(raw, schema);
-      if (rb && isSafeSql(rb)) { 
-        sql = rb; 
-        used = 'rules'; 
+    const rb = ruleBasedSql(raw, schema);
+    if (rb && isSafeSql(rb)) { 
+      sql = rb; 
+      used = 'rules-priority';
+      console.log('Kural tabanlı SQL kullanıldı:', sql);
+    } else {
+      // Kural tabanlı yoksa GPT'yi dene
+      try {
+        sql = await nlToSql_gpt(raw, schema);
+        if (sql && isSafeSql(sql)) {
+          used = 'nl2sql-gpt';
+        } else {
+          sql = '';
+        }
+      } catch (e) {
+        gptErr = `${e?.status || e?.code || ''} ${e?.message || String(e)}`;
+        sql = '';
       }
     }
     
