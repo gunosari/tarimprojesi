@@ -262,8 +262,8 @@ function ruleBasedSql(nlRaw, schema) {
   const yearFilter = year ? `AND "${yilCol}"=${Number(year)}` : '';
   const catFilter = (kat && catCol) ? `AND "${catCol}"='${escapeSQL(kat)}'` : '';
   
-  // Basit toplam üretim sorgusu (en yaygın)
-  if (il && urun && /üretim/i.test(nl)) {
+  // 1) Basit toplam üretim sorgusu (en yaygın ve kritik)
+  if (il && urun && (/üretim/i.test(nl) || /kadar/i.test(nl) || /ton/i.test(nl))) {
     const likeHead = headMatchExpr(urun, urunCol);
     return `
       SELECT SUM("${uretimCol}") AS toplam_uretim, SUM("${alanCol}") AS toplam_alan
@@ -275,7 +275,63 @@ function ruleBasedSql(nlRaw, schema) {
     `.trim().replace(/\s+/g, ' ');
   }
   
-  // Diğer kural sorgularını da ekle...
+  // 2) "en çok üretilen" sorgular
+  if (il && /en çok üretilen/i.test(nl)) {
+    const likeHead = urun ? headMatchExpr(urun, urunCol) : '';
+    const limit = (nl.match(/(\d+)/) || ['', '5'])[1];
+    
+    return `
+      SELECT "${urunCol}" AS urun, SUM("${uretimCol}") AS toplam_uretim
+      FROM ${TABLE}
+      WHERE "${ilCol}"='${escapeSQL(il)}'
+        ${catFilter}
+        ${likeHead ? `AND ${likeHead}` : ''}
+        ${yearFilter}
+      GROUP BY "${urunCol}"
+      ORDER BY toplam_uretim DESC
+      LIMIT ${limit}
+    `.trim().replace(/\s+/g, ' ');
+  }
+  
+  // 3) "hangi ilçelerde" sorgular
+  if (il && urun && /hangi ilçelerde/i.test(nl)) {
+    const likeHead = headMatchExpr(urun, urunCol);
+    return `
+      SELECT "${ilceCol}" AS ilce, SUM("${uretimCol}") AS uretim, SUM("${alanCol}") AS alan
+      FROM ${TABLE}
+      WHERE "${ilCol}"='${escapeSQL(il)}'
+        AND ${likeHead}
+        ${yearFilter}
+      GROUP BY "${ilceCol}"
+      ORDER BY uretim DESC
+      LIMIT 10
+    `.trim().replace(/\s+/g, ' ');
+  }
+  
+  // 4) Kategorik üretim (sebze/meyve/tahıl)
+  if (il && kat && !urun && /üretim/i.test(nl)) {
+    return `
+      SELECT SUM("${uretimCol}") AS toplam_uretim, SUM("${alanCol}") AS toplam_alan
+      FROM ${TABLE}
+      WHERE "${ilCol}"='${escapeSQL(il)}'
+        ${catFilter}
+        ${yearFilter}
+    `.trim().replace(/\s+/g, ' ');
+  }
+  
+  // 5) Toplam ekim alanı
+  if (il && /(toplam)?.*(ekim )?alan/i.test(nl)) {
+    const likeHead = urun ? headMatchExpr(urun, urunCol) : '';
+    return `
+      SELECT SUM("${alanCol}") AS toplam_alan
+      FROM ${TABLE}
+      WHERE "${ilCol}"='${escapeSQL(il)}'
+        ${likeHead ? `AND ${likeHead}` : ''}
+        ${catFilter}
+        ${yearFilter}
+    `.trim().replace(/\s+/g, ' ');
+  }
+  
   return '';
 }
 
@@ -397,28 +453,24 @@ export default async function handler(req, res) {
       }
     }
     
-    // 1) GPT ile dene
-    let used = 'nl2sql-gpt', gptErr = '', sql = '';
-    
-    try {
-      sql = await nlToSql_gpt(raw, schema);
-    } catch (e) {
-      gptErr = `${e?.status || e?.code || ''} ${e?.message || String(e)}`;
-      used = 'fallback-rules';
-    }
-    
-    // 2) Güvenli değilse kural tabanlı
-    if (!sql || !isSafeSql(sql)) {
-      if (FORCE_GPT_ONLY) {
-        res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-        res.status(200).send(`🧭 Mod: gpt-only | GPT SQL geçersiz/boş\nSQL:\n${sql || '(yok)'}`);
-        return;
-      }
-      
-      const rb = ruleBasedSql(raw, schema);
-      if (rb && isSafeSql(rb)) { 
-        sql = rb; 
-        used = 'rules'; 
+    // *** ÖNCELİK: Yaygın sorgular için ÖNCE kural tabanlı dene ***
+    const rb = ruleBasedSql(raw, schema);
+    if (rb && isSafeSql(rb)) { 
+      sql = rb; 
+      used = 'rules-priority';
+      console.log('Kural tabanlı SQL kullanıldı:', sql);
+    } else {
+      // Kural tabanlı yoksa GPT'yi dene
+      try {
+        sql = await nlToSql_gpt(raw, schema);
+        if (sql && isSafeSql(sql)) {
+          used = 'nl2sql-gpt';
+        } else {
+          sql = '';
+        }
+      } catch (e) {
+        gptErr = `${e?.status || e?.code || ''} ${e?.message || String(e)}`;
+        sql = '';
       }
     }
     
