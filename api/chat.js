@@ -90,32 +90,35 @@ Single table: ${TABLE}("${cols.join('","')}")
 - If the question asks for "üretim" (production), use SUM("uretim_miktari") without GROUP BY to get the total production for all variants of the product.
 - If the question asks for "ekim alanı" (cultivated area), use SUM("uretim_alani") without GROUP BY to get the total area for all variants of the product.
 - If the question asks "hangi ilçelerde" (which districts), use SUM("uretim_miktari") with GROUP BY "ilce" and ORDER BY SUM("uretim_miktari") DESC without LIMIT to list all relevant districts.
-- If the question specifies a category (e.g., "sebze" for vegetables, "meyve" for fruit, "tahıl" for grain), filter by "${catCol}" = 'Sebze' or equivalent.
-- For phrases like "en çok üretilen", use SUM("uretim_miktari") with GROUP BY "urun_adi" and ORDER BY SUM("uretim_miktari") DESC LIMIT 1.
-- Return a SINGLE SELECT statement and ONLY SQL. Use double-quotes for column names.
+- If the question asks for "en çok üretilen" with a number (e.g., "en çok üretilen 5 ürün"), use SUM("uretim_miktari") with GROUP BY "urun_adi" and ORDER BY SUM("uretim_miktari") DESC LIMIT [number].
+- If the question specifies a year (e.g., "2022"), filter by "yil" = [year].
+- If the question specifies a category (e.g., "sebze" for vegetables), filter by "${catCol}" = 'Sebze' or equivalent.
+- Return a SINGLE SELECT statement for EACH question provided, separated by newlines. Ensure each SQL is valid with FROM clause and proper syntax.
+- Use double-quotes for column names.
   `.trim();
   const user = `
 Question: """${nl}"""
-- Extract the product name from the question (e.g., "üzüm" from "Mersin üzüm üretimi", "domates" from "Antalya’da domates en çok hangi ilçelerde üretiliyor").
-- If "üretim" is mentioned, use SUM("uretim_miktari") without GROUP BY, filtered by the extracted product name.
-- If "ekim alanı" is mentioned, use SUM("uretim_alani") without GROUP BY, filtered by the extracted product name.
-- If "hangi ilçelerde" is mentioned, use SUM("uretim_miktari") with GROUP BY "ilce" and ORDER BY SUM("uretim_miktari") DESC without LIMIT.
-- "en çok üretilen" -> SUM("uretim_miktari") with GROUP BY "urun_adi" ORDER BY SUM("uretim_miktari") DESC LIMIT 1.
-- Apply filters for category if mentioned (e.g., "sebze" -> "${catCol}" = 'Sebze').
-- Use HEAD-MATCH for the product name (e.g., "urun_adi" LIKE '%domates%' OR "urun_adi" LIKE '%Domates%').
+- Process each question separately and return one SQL statement per question, separated by newlines.
+- Extract the product name, year, and category (if any) from each question.
+- For "Mersin’de kaç ton sebze üretilmiş?": Use SUM("uretim_miktari") without GROUP BY, filter by "il" = 'Mersin' and "urun_cesidi" = 'Sebze'.
+- For "Adana’da en çok üretilen 5 ürün": Use SUM("uretim_miktari") with GROUP BY "urun_adi" ORDER BY SUM("uretim_miktari") DESC LIMIT 5, filter by "il" = 'Adana'.
+- For "Antalya’da domates en çok hangi ilçelerde üretiliyor?": Use SUM("uretim_miktari") with GROUP BY "ilce" ORDER BY SUM("uretim_miktari") DESC, filter by "il" = 'Antalya' and "urun_adi" LIKE '%domates%'.
+- For "İzmir’de toplam ekim alanı (dekar)": Use SUM("uretim_alani") without GROUP BY, filter by "il" = 'Izmir'.
+- For "Mersin 2022 biber üretimi": Use SUM("uretim_miktari") without GROUP BY, filter by "il" = 'Mersin', "yil" = 2022, and "urun_adi" LIKE '%biber%'.
+- Use HEAD-MATCH for product names (e.g., "urun_adi" LIKE '%domates%' OR "urun_adi" LIKE '%Domates%').
 - Table name: ${TABLE}.
   `.trim();
   const r = await openai.chat.completions.create({
     model: MODEL,
     messages: [{ role: 'system', content: system }, { role: 'user', content: user }],
   });
-  let sql = (r.choices[0].message.content || '')
+  let sqls = (r.choices[0].message.content || '')
     .replace(/```[\s\S]*?```/g, s => s.replace(/```(sql)?/g,'').replace(/```/g,''))
     .trim()
-    .replace(/;+\s*$/,'');
-  sql = sql.replace(/"urun_adi"\s*=\s*'([^']+)'/gi, (_m, val) => headMatchExpr(val));
-  sql = autoYear(sql);
-  return sql;
+    .split('\n')
+    .map(s => s.trim())
+    .filter(s => s);
+  return sqls.length > 0 ? sqls.join('\n') : '';
 }
 
 /** ======= Kural Tabanlı Yedek ======= **/
@@ -366,16 +369,17 @@ export default async function handler(req, res) {
       res.status(200).send(`🧭 Mod: fallback_il_top_urun\nİl: ${ilInput}\n\n${text}`);
       return;
     }
-    // 4) SQL'i çalıştır
+    // 4) SQL'i çalıştır (çoklu SQL desteği)
     let rows = [];
-    try {
-      const st = db.prepare(sql);
-      while (st.step()) rows.push(st.getAsObject());
-      st.free();
-    } catch (e) {
-      res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-      res.status(200).send(`🧭 Mod: ${used} (model: ${MODEL})\nSQL derlenemedi.\nSQL:\n${sql}\n\nHata: ${String(e)}`);
-      return;
+    const sqls = sql.split('\n').map(s => s.trim()).filter(s => s);
+    for (const singleSql of sqls) {
+      try {
+        const st = db.prepare(singleSql);
+        while (st.step()) rows.push(st.getAsObject());
+        st.free();
+      } catch (e) {
+        console.error(`SQL hatası: ${singleSql}\nHata: ${String(e)}`);
+      }
     }
     // 5) Özet + Debug
     const nice = await prettyAnswer(raw, rows);
