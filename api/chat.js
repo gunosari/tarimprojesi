@@ -84,24 +84,33 @@ function makeIsSafeSql(allowedNames) {
 /** ======= GPT Katmanı ======= **/
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-// Geliştirilmiş ürün eşleşme
+// AKILLI ürün eşleşme - spesifik çeşit vs genel ürün
 function headMatchExpr(raw, urunCol = 'urun_adi') {
-  const product = String(raw || '').trim().toLowerCase();
+  const rawText = String(raw || '').trim();
+  const product = rawText.toLowerCase();
   
-  // TÜİK çok çeşitli ürünler - hibrit arama
+  // TÜİK çok çeşitli ürünler
   const multiVarietyProducts = [
     'biber', 'domates', 'hıyar', 'kabak', 'lahana', 'marul', 'soğan', 'sarımsak', 
     'turp', 'kereviz', 'elma', 'portakal', 'mandalina', 'üzüm', 'fasulye', 'bakla', 
     'bezelye', 'börülce', 'mercimek', 'mısır', 'arpa', 'yulaf', 'çavdar',
-    'pamuk', 'ayçiçeği', 'şeker', 'fiğ', 'yonca', 'haşhaş'
+    'pamuk', 'ayçiçeği', 'şeker', 'fiğ', 'yonca', 'haşhaş', 'buğday'
   ];
   
+  // SPESIFIK ÇEŞIT KONTROLÜ
+  // Eğer 2+ kelimeli bir isimse (Yafa Portakal, Durum Buğdayı), tam eşleşme yap
+  if (rawText.includes(' ') || rawText.length > 8) {
+    return `"${urunCol}" LIKE '%${escapeSQL(rawText)}%'`;
+  }
+  
+  // GENEL ÜRÜN İSMI - çeşitli ürünse geniş ara
   if (multiVarietyProducts.includes(product)) {
     const productCapitalized = product.charAt(0).toUpperCase() + product.slice(1);
     return `("${urunCol}" LIKE '${escapeSQL(productCapitalized)} %' OR "${urunCol}" LIKE '%${escapeSQL(productCapitalized)}%')`;
   }
   
-  const head = raw.charAt(0).toUpperCase() + raw.slice(1).toLowerCase();
+  // Diğer ürünler için dar arama
+  const head = rawText.charAt(0).toUpperCase() + rawText.slice(1).toLowerCase();
   return `("${urunCol}" LIKE '${escapeSQL(head)} %' OR "${urunCol}"='${escapeSQL(head)}')`;
 }
 
