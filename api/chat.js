@@ -212,21 +212,11 @@ Ana kolonlar: "${ilCol}", "${ilceCol}", "${urunCol}", "${yilCol}", "${uretimCol}
       .trim()
       .replace(/;+\s*$/,'');
     
-    // *** DÜZELTİLMİŞ POST-PROCESSING ***
-    // Hem = hem de LIKE durumlarını yakala
-    sql = sql.replace(new RegExp(`"${urunCol}"\\s*(=|LIKE)\\s*'([^']+)'`, 'gi'), 
-      (match, operator, val) => {
-        console.log(`Post-processing ${operator} durumu yakalandı: ${val}`);
-        return headMatchExpr(val, urunCol);
-      });
-    
-    // Basit LIKE pattern'lerini de değiştir (örn: 'Mısır%' -> hibrit arama)
-    sql = sql.replace(new RegExp(`"${urunCol}"\\s+LIKE\\s+'([^']+)%?'`, 'gi'), 
+    // *** BASIT POST-PROCESSING - Sadece = durumunu yakala ***
+    sql = sql.replace(new RegExp(`"${urunCol}"\\s*=\\s*'([^']+)'`, 'g'), 
       (match, val) => {
-        console.log(`LIKE pattern yakalandı: ${val}`);
-        // % işaretini kaldır
-        const cleanVal = val.replace(/%+$/, '');
-        return headMatchExpr(cleanVal, urunCol);
+        console.log(`Post-processing eşitlik yakalandı: ${val}`);
+        return headMatchExpr(val, urunCol);
       });
     
     sql = autoYear(sql, yilCol);
