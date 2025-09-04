@@ -99,9 +99,25 @@ function makeIsSafeSql(allowedNames) {
 /** ======= GPT Katmanı ======= **/
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
+// *** DÜZELTİLMİŞ ÜRÜN EŞLEŞME FONKSİYONU ***
 function headMatchExpr(raw, urunCol = 'urun_adi') {
-  const H = String(raw || '').trim();
-  const head = H.charAt(0).toUpperCase() + H.slice(1).toLowerCase();
+  const product = String(raw || '').trim().toLowerCase();
+  
+  // TÜİK'te çok çeşitli olan ürünler - geniş arama yap
+  const multiVarietyProducts = [
+    'üzüm', 'elma', 'portakal', 'mandalina', 'domates', 'biber', 
+    'marul', 'lahana', 'zeytin', 'limon', 'kavun', 'karpuz',
+    'salatalık', 'hıyar', 'fasulye', 'soğan', 'patates'
+  ];
+  
+  // Eğer çok çeşitli bir ürünse, geniş arama (tüm çeşitlerini bul)
+  if (multiVarietyProducts.includes(product)) {
+    const productCapitalized = product.charAt(0).toUpperCase() + product.slice(1);
+    return `"${urunCol}" LIKE '%${escapeSQL(productCapitalized)}%'`;
+  }
+  
+  // Diğer ürünler için dar arama (eski sistem)
+  const head = raw.charAt(0).toUpperCase() + raw.slice(1).toLowerCase();
   return `("${urunCol}" LIKE '${escapeSQL(head)} %' OR "${urunCol}"='${escapeSQL(head)}')`;
 }
 
@@ -151,7 +167,7 @@ KOLON AÇIKLAMALARI:
 
 KURALLAR:
 1. Yıl belirtilmemişse tüm yılları topla; sonra 2024 enjekte edilecek
-2. Genel ürün isimleri için (örn: "üzüm") BAŞTA-EŞLEŞME kullan: "${urunCol}" LIKE 'Üzüm %' OR "${urunCol}"='Üzüm' 
+2. Genel ürün isimleri için (örn: "üzüm") TÜM ÇEŞİTLERİNİ dahil et: "${urunCol}" LIKE '%Üzüm%'
 3. Kategori belirtilmişse (meyve/sebze/tahıl) "${catCol}" = 'Meyve' filtresi ekle
 4. "ekim alanı" için SUM("${alanCol}") kullan
 5. "en çok üretilen" için SUM("${uretimCol}") ile GROUP BY ve ORDER BY
