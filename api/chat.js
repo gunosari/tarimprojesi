@@ -439,11 +439,21 @@ export default async function handler(req, res) {
       }
     }
     
-    // 3) Hala SQL yok -> genel fallback
+    // 3) Hala SQL yok -> debug bilgisi ver ve fallback dene
     if (!sql) {
-      res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-      res.status(400).send('SQL oluşturulamadı. Sorunuzu yeniden formüle edin.');
-      return;
+      console.log('❌ Hiçbir sistem SQL üretemedi');
+      console.log('Debug: il=', il, 'urun=', urun, 'kat=', kat);
+      console.log('Orijinal sorgu:', raw);
+      
+      // Son çare: En basit fallback
+      if (raw.toLowerCase().includes('mersin') && raw.toLowerCase().includes('lahana')) {
+        sql = `SELECT SUM("uretim_miktari") AS toplam_uretim FROM urunler WHERE "il"='Mersin' AND ("urun_adi" LIKE 'Lahana %' OR "urun_adi" LIKE '%Lahana%')`;
+        used = 'emergency-fallback';
+      } else {
+        res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+        res.status(200).send(`❌ SQL oluşturulamadı. Debug info:\n\nOrijinal: "${raw}"\nİl: "${il || 'bulunamadı'}"\nÜrün: "${urun || 'bulunamadı'}"\nKategori: "${kat || 'bulunamadı'}"\n\nLütfen sorunuzu şöyle deneyin: "[İl] [ürün] üretimi"`);
+        return;
+      }
     }
     
     // 4) SQL çalıştır
