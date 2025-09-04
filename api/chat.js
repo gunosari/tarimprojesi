@@ -93,7 +93,7 @@ Single table: ${TABLE}("${cols.join('","')}")
 - If the question asks for "en çok üretilen" with a number (e.g., "en çok üretilen 5 ürün"), use SUM("uretim_miktari") with GROUP BY "urun_adi" and ORDER BY SUM("uretim_miktari") DESC LIMIT [number].
 - If the question specifies a year (e.g., "2022"), filter by "yil" = [year].
 - If the question specifies a category (e.g., "sebze" for vegetables), filter by "${catCol}" = 'Sebze' or equivalent.
-- Return a SINGLE SELECT statement for EACH question provided, separated by newlines. Ensure each SQL is valid with FROM clause and proper syntax.
+- Return a SINGLE SELECT statement for EACH question provided, separated by newlines. Ensure each SQL is valid with FROM clause and proper syntax (e.g., SELECT ... FROM urunler ...).
 - Use double-quotes for column names.
   `.trim();
   const user = `
@@ -144,7 +144,7 @@ function ruleBasedSql(nlRaw, cols, catCol) {
     const likeHead = urun ? headMatchExpr(urun) : '';
     return `
       SELECT "urun_adi" AS urun, SUM("uretim_miktari") AS toplam_uretim
-      FROM ${TABLE}
+      FROM urunler
       WHERE "il"='${escapeSQL(il)}'
         ${kat ? `AND "${catCol}"='${escapeSQL(kat)}'` : ''}
         ${likeHead ? `AND ${likeHead}` : ''}
@@ -159,7 +159,7 @@ function ruleBasedSql(nlRaw, cols, catCol) {
     const likeHead = urun ? `("urun_adi" LIKE '%${escapeSQL(urun)}%' OR "urun_adi" LIKE '%${escapeSQL(urun.charAt(0).toUpperCase() + urun.slice(1))}%')` : '';
     return `
       SELECT "urun_adi" AS urun, SUM("uretim_alani") AS toplam_alan
-      FROM ${TABLE}
+      FROM urunler
       WHERE "il"='${escapeSQL(il)}'
         ${likeHead ? `AND ${likeHead}` : ''}
         ${year ? `AND "yil"=${Number(year)}` : ''}
@@ -174,7 +174,7 @@ function ruleBasedSql(nlRaw, cols, catCol) {
     const likeHead = urun ? `("urun_adi" LIKE '%${escapeSQL(urun)}%' OR "urun_adi" LIKE '%${escapeSQL(urun.charAt(0).toUpperCase() + urun.slice(1))}%')` : '';
     return `
       SELECT SUM("uretim_miktari") AS toplam_uretim
-      FROM ${TABLE}
+      FROM urunler
       WHERE "il"='${escapeSQL(il)}'
         ${likeHead ? `AND ${likeHead}` : ''}
         ${year ? `AND "yil"=${Number(year)}` : ''}
@@ -186,7 +186,7 @@ function ruleBasedSql(nlRaw, cols, catCol) {
     const likeHead = urun ? headMatchExpr(urun) : '';
     return `
       SELECT SUM("uretim_miktari") AS toplam_uretim
-      FROM ${TABLE}
+      FROM urunler
       WHERE "il"='${escapeSQL(il)}'
         ${likeHead ? `AND ${likeHead}` : ''}
         ${year ? `AND "yil"=${Number(year)}` : ''}
@@ -197,7 +197,7 @@ function ruleBasedSql(nlRaw, cols, catCol) {
   if (il && (/kaç\s+ton/i.test(nl) || /toplam.*üretim/i.test(nl)) && !urun) {
     return `
       SELECT SUM("uretim_miktari") AS toplam_uretim
-      FROM ${TABLE}
+      FROM urunler
       WHERE "il"='${escapeSQL(il)}'
         ${kat ? `AND "${catCol}"='${escapeSQL(kat)}'` : ''}
         ${year ? `AND "yil"=${Number(year)}` : ''}
@@ -208,7 +208,7 @@ function ruleBasedSql(nlRaw, cols, catCol) {
     const likeHead = headMatchExpr(urun);
     return `
       SELECT SUM("uretim_miktari") AS toplam_uretim
-      FROM ${TABLE}
+      FROM urunler
       WHERE "il"='${escapeSQL(il)}'
         AND ${likeHead}
         ${year ? `AND "yil"=${Number(year)}` : ''}
@@ -219,7 +219,7 @@ function ruleBasedSql(nlRaw, cols, catCol) {
   if (il && /(toplam)?.*(ekim )?alan/i.test(nl)) {
     return `
       SELECT SUM("uretim_alani") AS toplam_alan
-      FROM ${TABLE}
+      FROM urunler
       WHERE "il"='${escapeSQL(il)}'
         ${kat ? `AND "${catCol}"='${escapeSQL(kat)}'` : ''}
         ${year ? `AND "yil"=${Number(year)}` : ''}
@@ -230,7 +230,7 @@ function ruleBasedSql(nlRaw, cols, catCol) {
   if (il && /(en çok üretilen\s+\d+\s+ürün|en çok üretilen ürün)/i.test(nl)) {
     return `
       SELECT "urun_adi" AS urun, SUM("uretim_miktari") AS uretim, SUM("uretim_alani") AS alan
-      FROM ${TABLE}
+      FROM urunler
       WHERE "il"='${escapeSQL(il)}'
         ${kat ? `AND "${catCol}"='${escapeSQL(kat)}'` : ''}
         ${year ? `AND "yil"=${Number(year)}` : ''}
@@ -244,7 +244,7 @@ function ruleBasedSql(nlRaw, cols, catCol) {
     const likeHead = headMatchExpr(urun);
     return `
       SELECT "ilce" AS ilce, SUM("uretim_miktari") AS uretim, SUM("uretim_alani") AS alan
-      FROM ${TABLE}
+      FROM urunler
       WHERE "il"='${escapeSQL(il)}'
         AND ${likeHead}
         ${year ? `AND "yil"=${Number(year)}` : ''}
@@ -257,7 +257,7 @@ function ruleBasedSql(nlRaw, cols, catCol) {
   if (il && /verim/i.test(nl)) {
     return `
       SELECT CASE WHEN SUM("uretim_alani")>0 THEN ROUND(SUM("uretim_miktari")/SUM("uretim_alani"), 4) ELSE NULL END AS ort_verim
-      FROM ${TABLE}
+      FROM urunler
       WHERE "il"='${escapeSQL(il)}'
         ${kat ? `AND "${catCol}"='${escapeSQL(kat)}'` : ''}
         ${year ? `AND "yil"=${Number(year)}` : ''}
@@ -314,7 +314,7 @@ export default async function handler(req, res) {
       const [ilInput, urunInput] = raw.split(',').map(s => s.trim());
       const stmt = db.prepare(`
         SELECT "ilce" AS ilce, SUM("uretim_miktari") AS uretim, SUM("uretim_alani") AS alan
-        FROM ${TABLE}
+        FROM urunler
         WHERE "il" = ? AND ${headMatchExpr(urunInput)}
         GROUP BY "ilce"
         ORDER BY uretim DESC
@@ -352,7 +352,7 @@ export default async function handler(req, res) {
       const ilInput = raw;
       let tmp = `
         SELECT "urun_adi" AS urun, SUM("uretim_miktari") AS uretim, SUM("uretim_alani") AS alan
-        FROM ${TABLE}
+        FROM urunler
         WHERE "il" = ?
         GROUP BY "urun_adi"
         ORDER BY uretim DESC
