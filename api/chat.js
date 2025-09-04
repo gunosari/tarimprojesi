@@ -441,17 +441,26 @@ export default async function handler(req, res) {
     
     // 3) Hala SQL yok -> debug bilgisi ver ve fallback dene
     if (!sql) {
+      // Debug için değişkenleri tekrar tanımla
+      const debugNl = raw.toLowerCase();
+      const debugIlPattern = /([A-ZÇĞİÖŞÜ][a-zçğıöşüa-z]+)(?:\s*il[inde]*|['']?[dt][ae]|['']?[ndı]e|\s|$)/i;
+      const debugIlMatch = raw.match(debugIlPattern);
+      const debugIl = debugIlMatch ? debugIlMatch[1] : '';
+      
+      const debugUrunPattern = /(domates|biber|lahana|marul|elma|üzüm|fasulye)/i;
+      const debugUrun = (debugNl.match(debugUrunPattern) || [])[1] || '';
+      
       console.log('❌ Hiçbir sistem SQL üretemedi');
-      console.log('Debug: il=', il, 'urun=', urun, 'kat=', kat);
+      console.log('Debug: il=', debugIl, 'urun=', debugUrun);
       console.log('Orijinal sorgu:', raw);
       
       // Son çare: En basit fallback
-      if (raw.toLowerCase().includes('mersin') && raw.toLowerCase().includes('lahana')) {
+      if (debugNl.includes('mersin') && debugNl.includes('lahana')) {
         sql = `SELECT SUM("uretim_miktari") AS toplam_uretim FROM urunler WHERE "il"='Mersin' AND ("urun_adi" LIKE 'Lahana %' OR "urun_adi" LIKE '%Lahana%')`;
         used = 'emergency-fallback';
       } else {
         res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-        res.status(200).send(`❌ SQL oluşturulamadı. Debug info:\n\nOrijinal: "${raw}"\nİl: "${il || 'bulunamadı'}"\nÜrün: "${urun || 'bulunamadı'}"\nKategori: "${kat || 'bulunamadı'}"\n\nLütfen sorunuzu şöyle deneyin: "[İl] [ürün] üretimi"`);
+        res.status(200).send(`❌ SQL oluşturulamadı. Debug info:\n\nOrijinal: "${raw}"\nİl: "${debugIl || 'bulunamadı'}"\nÜrün: "${debugUrun || 'bulunamadı'}"\n\nLütfen sorunuzu şöyle deneyin: "[İl] [ürün] üretimi"`);
         return;
       }
     }
