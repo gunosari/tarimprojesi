@@ -261,7 +261,6 @@ function ruleBasedSql(nlRaw, cols, catCol) {
   }
   return '';
 }
-
 /** ======= Güzel cevap (opsiyonel GPT) ======= **/
 async function prettyAnswer(question, rows) {
   if (!process.env.OPENAI_API_KEY) {
@@ -280,7 +279,6 @@ async function prettyAnswer(question, rows) {
   });
   return (r.choices[0].message.content || '').trim();
 }
-
 /** ======= Handler ======= **/
 export default async function handler(req, res) {
   try {
