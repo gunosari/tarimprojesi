@@ -232,7 +232,14 @@ function ruleBasedSql(nlRaw, schema) {
   const uretimCol = columns.find(c => ['uretim_miktari', 'uretim', 'Üretim', 'production'].includes(c)) || 'uretim_miktari';
   const alanCol = columns.find(c => ['uretim_alani', 'alan', 'Alan', 'area'].includes(c)) || 'uretim_alani';
   
-  // İl tespit et - "Mersin ili", "Mersin'de", "Mersinde" hepsini "Mersin" olarak al
+  // Çok çeşitli ürünlerin listesi
+  const multiVarietyProducts = [
+    'biber', 'domates', 'hıyar', 'kabak', 'lahana', 'marul', 'soğan', 'sarımsak', 
+    'turp', 'kereviz', 'elma', 'portakal', 'mandalina', 'üzüm', 'fasulye', 'bakla', 
+    'bezelye', 'börülce', 'mercimek', 'mısır', 'arpa', 'yulaf', 'çavdar'
+  ];
+  
+  // İl tespit et
   let il = '';
   const ilPattern = /([A-ZÇĞİÖŞÜ][a-zçğıöşü]+)(?:\s+il[inde]*|[''`´]?[dt]e|[''`´]?[dt]a|\s|$)/;
   const mIl = nl.match(ilPattern);
@@ -243,9 +250,21 @@ function ruleBasedSql(nlRaw, schema) {
   // Yıl tespit et
   const year = (nl.match(/\b(19\d{2}|20\d{2})\b/) || [])[1] || '';
   
-  // Ürün tespit et
+  // Ürün tespit et - hem bilinen pattern'dan hem de kelime kelime
   const known = /(domates|biber|patlıcan|kabak|hıyar|salatalık|karpuz|karnabahar|lahana|marul|fasulye|soğan|sarımsak|patates|brokoli|ispanak|maydanoz|enginar|bezelye|bakla|elma|portakal|mandalina|limon|muz|zeytin|üzüm|armut|şeftali|kayısı|nar|incir|vişne|çilek|kiraz|kavun|ayva|fındık|ceviz|antep fıstığı|buğday|arpa|mısır|çeltik|pirinç|yulaf|çavdar|ayçiçeği|kanola)/i;
   let urun = (nl.match(known) || [])[1] || '';
+  
+  // Eğer bulunamadıysa, cümleyi kelime kelime kontrol et
+  if (!urun) {
+    const words = nl.split(/\s+/);
+    for (const word of words) {
+      const cleanWord = word.toLowerCase().replace(/[''`´,\.!?]/g, '');
+      if (multiVarietyProducts.includes(cleanWord)) {
+        urun = cleanWord;
+        break;
+      }
+    }
+  }
   
   if (!urun) {
     const mu = nl.match(/([a-zçğıöşü]{3,})\s*(?:ürünü|ürün)?\s*üretimi/i);
@@ -293,19 +312,35 @@ function ruleBasedSql(nlRaw, schema) {
     `.trim().replace(/\s+/g, ' ');
   }
   
-  // 3) "hangi ilçelerde" sorgular
-  if (il && urun && /hangi ilçelerde/i.test(nl)) {
-    const likeHead = headMatchExpr(urun, urunCol);
-    return `
-      SELECT "${ilceCol}" AS ilce, SUM("${uretimCol}") AS uretim, SUM("${alanCol}") AS alan
-      FROM ${TABLE}
-      WHERE "${ilCol}"='${escapeSQL(il)}'
-        AND ${likeHead}
-        ${yearFilter}
-      GROUP BY "${ilceCol}"
-      ORDER BY uretim DESC
-      LIMIT 10
-    `.trim().replace(/\s+/g, ' ');
+  // 3) "hangi ilçelerde" sorgular (EN ÖNEMLİ - sık sorulan)
+  if (il && /hangi ilçelerde/i.test(nl)) {
+    // Ürün tespit et - hem bilinen listeden hem de cümleden
+    let detectedUrun = urun;
+    if (!detectedUrun) {
+      // Cümledeki ürün adını bul
+      const words = nl.split(/\s+/);
+      for (const word of words) {
+        const cleanWord = word.toLowerCase().replace(/[''`´,\.]/g, '');
+        if (multiVarietyProducts.includes(cleanWord)) {
+          detectedUrun = cleanWord;
+          break;
+        }
+      }
+    }
+    
+    if (detectedUrun) {
+      const likeHead = headMatchExpr(detectedUrun, urunCol);
+      return `
+        SELECT "${ilceCol}" AS ilce, SUM("${uretimCol}") AS uretim, SUM("${alanCol}") AS alan
+        FROM ${TABLE}
+        WHERE "${ilCol}"='${escapeSQL(il)}'
+          AND ${likeHead}
+          ${yearFilter}
+        GROUP BY "${ilceCol}"
+        ORDER BY uretim DESC
+        LIMIT 10
+      `.trim().replace(/\s+/g, ' ');
+    }
   }
   
   // 4) Kategorik üretim (sebze/meyve/tahıl)
