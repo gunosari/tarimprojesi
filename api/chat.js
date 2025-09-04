@@ -89,19 +89,20 @@ Single table: ${TABLE}("${cols.join('","')}")
 - For general product names (e.g., "üzüm", "portakal", "domates"), extract the product name from the question and use HEAD-MATCH: "urun_adi" LIKE '%[product_name]%' OR "urun_adi" LIKE '%[Product_Name]%' to include all variants (e.g., "Sofralık Üzüm", "Şaraplık Üzüm").
 - If the question asks for "üretim" (production), use SUM("uretim_miktari") without GROUP BY to get the total production for all variants of the product.
 - If the question asks for "ekim alanı" (cultivated area), use SUM("uretim_alani") without GROUP BY to get the total area for all variants of the product.
-- If the question specifies a category (e.g., "meyve" for fruit, "tahıl" for grain), filter by "${catCol}" = 'Meyve' or equivalent.
+- If the question asks "hangi ilçelerde" (which districts), use SUM("uretim_miktari") with GROUP BY "ilce" and ORDER BY SUM("uretim_miktari") DESC without LIMIT to list all relevant districts.
+- If the question specifies a category (e.g., "sebze" for vegetables, "meyve" for fruit, "tahıl" for grain), filter by "${catCol}" = 'Sebze' or equivalent.
 - For phrases like "en çok üretilen", use SUM("uretim_miktari") with GROUP BY "urun_adi" and ORDER BY SUM("uretim_miktari") DESC LIMIT 1.
-- For "hangi ilçelerde", group by district.
 - Return a SINGLE SELECT statement and ONLY SQL. Use double-quotes for column names.
   `.trim();
   const user = `
 Question: """${nl}"""
-- Extract the product name from the question (e.g., "üzüm" from "Mersin üzüm üretimi", "portakal" from "Mersin portakal ekim alanı").
+- Extract the product name from the question (e.g., "üzüm" from "Mersin üzüm üretimi", "domates" from "Antalya’da domates en çok hangi ilçelerde üretiliyor").
 - If "üretim" is mentioned, use SUM("uretim_miktari") without GROUP BY, filtered by the extracted product name.
 - If "ekim alanı" is mentioned, use SUM("uretim_alani") without GROUP BY, filtered by the extracted product name.
+- If "hangi ilçelerde" is mentioned, use SUM("uretim_miktari") with GROUP BY "ilce" and ORDER BY SUM("uretim_miktari") DESC without LIMIT.
 - "en çok üretilen" -> SUM("uretim_miktari") with GROUP BY "urun_adi" ORDER BY SUM("uretim_miktari") DESC LIMIT 1.
-- Apply filters for category if mentioned (e.g., "meyve" -> "${catCol}" = 'Meyve').
-- Use HEAD-MATCH for the product name (e.g., "urun_adi" LIKE '%üzüm%' OR "urun_adi" LIKE '%Üzüm%').
+- Apply filters for category if mentioned (e.g., "sebze" -> "${catCol}" = 'Sebze').
+- Use HEAD-MATCH for the product name (e.g., "urun_adi" LIKE '%domates%' OR "urun_adi" LIKE '%Domates%').
 - Table name: ${TABLE}.
   `.trim();
   const r = await openai.chat.completions.create({
@@ -261,6 +262,7 @@ function ruleBasedSql(nlRaw, cols, catCol) {
   }
   return '';
 }
+
 /** ======= Güzel cevap (opsiyonel GPT) ======= **/
 async function prettyAnswer(question, rows) {
   if (!process.env.OPENAI_API_KEY) {
@@ -279,6 +281,7 @@ async function prettyAnswer(question, rows) {
   });
   return (r.choices[0].message.content || '').trim();
 }
+
 /** ======= Handler ======= **/
 export default async function handler(req, res) {
   try {
