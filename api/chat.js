@@ -55,29 +55,21 @@ function getSchema(db) {
 function parseQuery(text) {
   const t = clean(text).toLowerCase();
   
-  // İl tespit - daha güçlü pattern
+  // İl tespit - çok basit yaklaşım
   let il = '';
   
-  // Basit il listesi ile cross-check
+  // Basit string arama - büyük/küçük harf duyarsız
   const iller = ['Adana','Adıyaman','Afyon','Ağrı','Amasya','Ankara','Antalya','Artvin','Aydın','Balıkesir','Bilecik','Bingöl','Bitlis','Bolu','Burdur','Bursa','Çanakkale','Çankırı','Çorum','Denizli','Diyarbakır','Edirne','Elazığ','Erzincan','Erzurum','Eskişehir','Gaziantep','Giresun','Gümüşhane','Hakkari','Hatay','Isparta','Mersin','İstanbul','İzmir','Kars','Kastamonu','Kayseri','Kırklareli','Kırşehir','Kocaeli','Konya','Kütahya','Malatya','Manisa','Kahramanmaraş','Mardin','Muğla','Muş','Nevşehir','Niğde','Ordu','Rize','Sakarya','Samsun','Siirt','Sinop','Sivas','Tekirdağ','Tokat','Trabzon','Tunceli','Şanlıurfa','Uşak','Van','Yozgat','Zonguldak','Aksaray','Bayburt','Karaman','Kırıkkale','Batman','Şırnak','Bartın','Ardahan','Iğdır','Yalova','Karabük','Kilis','Osmaniye','Düzce'];
   
   for (const ilAdi of iller) {
-    const patterns = [
-      new RegExp(`${ilAdi}'?[dt][ea]`, 'i'),     // Mersin'de
-      new RegExp(`${ilAdi}'?[dt][aı]`, 'i'),     // Mersin'ta  
-      new RegExp(`${ilAdi}\\s+ili`, 'i'),        // Mersin ili
-      new RegExp(`${ilAdi}(?=\\s|$)`, 'i')       // Mersin
-    ];
-    
-    for (const pattern of patterns) {
-      if (pattern.test(text)) {
-        il = ilAdi;
-        log('İl tespit edildi:', il);
-        break;
-      }
+    if (text.toLowerCase().includes(ilAdi.toLowerCase())) {
+      il = ilAdi;
+      log('✅ İl bulundu:', il);
+      break;
     }
-    if (il) break;
   }
+  
+  if (!il) log('❌ İl bulunamadı!');
   
   // Ürün tespit - doğal dil varyasyonları
   const urunler = [
@@ -322,8 +314,8 @@ export default async function handler(req, res) {
     const q = clean(question);
     log('Soru:', q);
     
-    // Cache kontrol
-    if (cache.has(q)) {
+    // Cache kontrol - debug modda cache atla
+    if (!DEBUG && cache.has(q)) {
       log('Cache hit');
       return res.status(200).send(`🧭 Cache\n${cache.get(q)}`);
     }
