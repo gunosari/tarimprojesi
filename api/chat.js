@@ -290,68 +290,42 @@ function buildSQL(parsed, schemaObj) {
   if (urun) wheres.push(buildUrunFilter(urun, s));
   
   const whereStr = wheres.join(' AND ');
-  log('🔧 WHERE koşulları:', whereStr);
-  log('🔧 SQL TİPİ:', tip);
+  log('🔧 Tip:', tip, 'WHERE:', whereStr);
   
   // SQL templates
   switch (tip) {
     case 'alan':
-      log('🔧 CASE: alan');
       return `SELECT SUM("${s.alan}") AS toplam_alan FROM ${TABLE} WHERE ${whereStr}`;
       
     case 'ilce_detay':
-      log('🔧 CASE: ilce_detay');
       return `SELECT "${s.ilce}", SUM("${s.uretim}") AS uretim 
               FROM ${TABLE} WHERE ${whereStr} 
               GROUP BY "${s.ilce}" ORDER BY uretim DESC LIMIT 10`;
               
     case 'ranking':
-      log('🔧 CASE: ranking - il:', !!il, 'urun:', !!urun, 'kategori:', !!kategori);
-      if (il && !urun && !kategori) {
-        // "Mersin'de en çok üretilen ürünler"
-        log('🔧 RANKING: il bazlı ürün listesi');
-        return `SELECT "${s.urun}", SUM("${s.uretim}") AS uretim 
-                FROM ${TABLE} WHERE ${whereStr} 
-                GROUP BY "${s.urun}" ORDER BY uretim DESC LIMIT 10`;
-      } else if (!il && urun) {
-        // "Domates en çok hangi illerde üretiliyor"
-        log('🔧 RANKING: ürün bazlı il listesi');
-        return `SELECT "${s.il}", SUM("${s.uretim}") AS uretim 
-                FROM ${TABLE} WHERE ${whereStr} 
-                GROUP BY "${s.il}" ORDER BY uretim DESC LIMIT 10`;
-      } else if (!il && kategori) {
-        // "Sebze en çok hangi illerde üretiliyor"
-        log('🔧 RANKING: kategori bazlı il listesi');
-        return `SELECT "${s.il}", SUM("${s.uretim}") AS uretim 
-                FROM ${TABLE} WHERE ${whereStr} 
-                GROUP BY "${s.il}" ORDER BY uretim DESC LIMIT 10`;
-      } else if (!il && !urun && !kategori) {
-        // "En çok ekim alanına sahip ürünler" - GENEL RANKING
-        log('🔧 RANKING: genel ürün listesi');
-        const alanVar = t.includes('alan') || t.includes('ekim') || t.includes('dekar');
-        if (alanVar) {
-          log('🔧 RANKING: alan bazlı ürün sıralaması');
+      if (!il && !urun && !kategori) {
+        // Genel ürün ranking
+        if (text.includes('alan') || text.includes('ekim')) {
           return `SELECT "${s.urun}", SUM("${s.alan}") AS toplam_alan 
                   FROM ${TABLE} WHERE ${whereStr} 
                   GROUP BY "${s.urun}" ORDER BY toplam_alan DESC LIMIT 10`;
         } else {
-          log('🔧 RANKING: üretim bazlı ürün sıralaması');
           return `SELECT "${s.urun}", SUM("${s.uretim}") AS toplam_uretim 
                   FROM ${TABLE} WHERE ${whereStr} 
                   GROUP BY "${s.urun}" ORDER BY toplam_uretim DESC LIMIT 10`;
         }
+      } else if (il && !urun && !kategori) {
+        return `SELECT "${s.urun}", SUM("${s.uretim}") AS uretim 
+                FROM ${TABLE} WHERE ${whereStr} 
+                GROUP BY "${s.urun}" ORDER BY uretim DESC LIMIT 10`;
+      } else if (!il && urun) {
+        return `SELECT "${s.il}", SUM("${s.uretim}") AS uretim 
+                FROM ${TABLE} WHERE ${whereStr} 
+                GROUP BY "${s.il}" ORDER BY uretim DESC LIMIT 10`;
       }
-      log('🔧 RANKING: fallthrough to default');
-      // fallthrough
-      
-    case 'compare':
-      log('🔧 CASE: compare');
-      // Basit karşılaştırma - şimdilik toplam olarak handle et
-      return `SELECT SUM("${s.uretim}") AS toplam_uretim, SUM("${s.alan}") AS toplam_alan 
-              FROM ${TABLE} WHERE ${whereStr}`;
+      break;
       
     default: // toplam
-      log('🔧 CASE: default (toplam)');
       return `SELECT SUM("${s.uretim}") AS toplam_uretim, SUM("${s.alan}") AS toplam_alan 
               FROM ${TABLE} WHERE ${whereStr}`;
   }
