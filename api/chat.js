@@ -197,11 +197,12 @@ function buildUrunFilter(urun, schema) {
   if (!urun) return '';
   
   // Çok çeşitli ürünler için geniş arama
-  const multiVariety = ['mısır','domates','biber','üzüm','elma','fasulye'];
+  const multiVariety = ['mısır','domates','biber','üzüm','elma','fasulye','muz','portakal','mandalina'];
   const cap = urun.charAt(0).toUpperCase() + urun.slice(1);
   
   if (multiVariety.includes(urun)) {
-    return `("${schema.urun}" LIKE '${escape(cap)} %' OR "${schema.urun}" LIKE '%${escape(cap)}%')`;
+    // ÇOK GENİŞ ARAMA - hem başta hem içinde
+    return `("${schema.urun}" LIKE '${escape(cap)} %' OR "${schema.urun}" LIKE '%${escape(cap)}%' OR "${schema.urun}" LIKE '% ${escape(cap)} %' OR "${schema.urun}" = '${escape(cap)}')`;
   } else {
     return `("${schema.urun}" LIKE '${escape(cap)} %' OR "${schema.urun}" = '${escape(cap)}')`;
   }
