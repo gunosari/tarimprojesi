@@ -1,4 +1,35 @@
-// api/chat.js — Basit tarım chatbot (temelden yazıldı)
+// Eğer ranking değilse diğer tipler
+  if (tip !== 'ranking') {
+    // Hem üretim hem alan isteniyorsa toplam
+    const uretimVar = t.includes('üretim') || t.includes('miktar') || t.includes('ton');
+    const alanVar = t.includes('alan') || t.includes('ekim') || t.includes('dekar');
+    
+    if (uretimVar && alanVar) {
+      tip = 'toplam'; // Her ikisi de
+      log('✅ Tip: toplam (üretim + alan)');
+    }
+    // Sadece alan isteniyorsa
+    else if (alanVar && !uretimVar) {
+      tip = 'alan';
+      log('✅ Tip: alan');
+    }
+    // İlçe/lokasyon sorguları
+    else if (t.includes('ilçe') || t.includes('nerede') || t.includes('hangi ilçe') || 
+             t.includes('bölge') || t.includes('yerde')) {
+      tip = 'ilce_detay';
+      log('✅ Tip: ilce_detay');
+    }
+    // Karşılaştırma sorguları
+    else if (t.includes('karşılaştır') || t.includes('fark') || t.includes('daha') ||
+             t.includes('versus') || t.includes('ile')) {
+      tip = 'compare';
+      log('✅ Tip: compare');
+    }
+    else {
+      tip = 'toplam';
+      log('✅ Tip: toplam (varsayılan)');
+    }
+  }// api/chat.js — Basit tarım chatbot (temelden yazıldı)
 export const config = { runtime: 'nodejs' };
 import fs from 'fs';
 import path from 'path';
@@ -260,54 +291,67 @@ function buildSQL(parsed, schemaObj) {
   
   const whereStr = wheres.join(' AND ');
   log('🔧 WHERE koşulları:', whereStr);
+  log('🔧 SQL TİPİ:', tip);
   
   // SQL templates
   switch (tip) {
     case 'alan':
+      log('🔧 CASE: alan');
       return `SELECT SUM("${s.alan}") AS toplam_alan FROM ${TABLE} WHERE ${whereStr}`;
       
     case 'ilce_detay':
+      log('🔧 CASE: ilce_detay');
       return `SELECT "${s.ilce}", SUM("${s.uretim}") AS uretim 
               FROM ${TABLE} WHERE ${whereStr} 
               GROUP BY "${s.ilce}" ORDER BY uretim DESC LIMIT 10`;
               
     case 'ranking':
+      log('🔧 CASE: ranking - il:', !!il, 'urun:', !!urun, 'kategori:', !!kategori);
       if (il && !urun && !kategori) {
         // "Mersin'de en çok üretilen ürünler"
+        log('🔧 RANKING: il bazlı ürün listesi');
         return `SELECT "${s.urun}", SUM("${s.uretim}") AS uretim 
                 FROM ${TABLE} WHERE ${whereStr} 
                 GROUP BY "${s.urun}" ORDER BY uretim DESC LIMIT 10`;
       } else if (!il && urun) {
         // "Domates en çok hangi illerde üretiliyor"
+        log('🔧 RANKING: ürün bazlı il listesi');
         return `SELECT "${s.il}", SUM("${s.uretim}") AS uretim 
                 FROM ${TABLE} WHERE ${whereStr} 
                 GROUP BY "${s.il}" ORDER BY uretim DESC LIMIT 10`;
       } else if (!il && kategori) {
         // "Sebze en çok hangi illerde üretiliyor"
+        log('🔧 RANKING: kategori bazlı il listesi');
         return `SELECT "${s.il}", SUM("${s.uretim}") AS uretim 
                 FROM ${TABLE} WHERE ${whereStr} 
                 GROUP BY "${s.il}" ORDER BY uretim DESC LIMIT 10`;
       } else if (!il && !urun && !kategori) {
         // "En çok ekim alanına sahip ürünler" - GENEL RANKING
+        log('🔧 RANKING: genel ürün listesi');
         const alanVar = t.includes('alan') || t.includes('ekim') || t.includes('dekar');
         if (alanVar) {
+          log('🔧 RANKING: alan bazlı ürün sıralaması');
           return `SELECT "${s.urun}", SUM("${s.alan}") AS toplam_alan 
                   FROM ${TABLE} WHERE ${whereStr} 
                   GROUP BY "${s.urun}" ORDER BY toplam_alan DESC LIMIT 10`;
         } else {
+          log('🔧 RANKING: üretim bazlı ürün sıralaması');
           return `SELECT "${s.urun}", SUM("${s.uretim}") AS toplam_uretim 
                   FROM ${TABLE} WHERE ${whereStr} 
                   GROUP BY "${s.urun}" ORDER BY toplam_uretim DESC LIMIT 10`;
         }
       }
+      log('🔧 RANKING: fallthrough to default');
       // fallthrough
       
     case 'compare':
+      log('🔧 CASE: compare');
       // Basit karşılaştırma - şimdilik toplam olarak handle et
       return `SELECT SUM("${s.uretim}") AS toplam_uretim, SUM("${s.alan}") AS toplam_alan 
               FROM ${TABLE} WHERE ${whereStr}`;
       
     default: // toplam
+      log('🔧 CASE: default (toplam)');
       return `SELECT SUM("${s.uretim}") AS toplam_uretim, SUM("${s.alan}") AS toplam_alan 
               FROM ${TABLE} WHERE ${whereStr}`;
   }
