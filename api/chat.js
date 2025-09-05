@@ -211,22 +211,17 @@ function ruleBasedSql(nlRaw, schema) {
   
   // Spesifik ürün sorguları
   if (il && urun && /üretim|kaç ton|toplam/.test(nl)) {
-    console.log('Spesifik ürün sorgusu tespit edildi');
+    console.log('✅ Spesifik ürün sorgusu tespit edildi');
     const likeHead = headMatchExpr(urun, urunCol);
-    return `
-      SELECT SUM("${uretimCol}") AS toplam_uretim, SUM("${alanCol}") AS toplam_alan
-      FROM ${TABLE}
-      WHERE "${ilCol}"='${escapeSQL(il)}'
-        AND ${likeHead}
-        ${yearFilter}
-        ${catFilter}
-    `.trim().replace(/\s+/g, ' ');
+    const sql = `SELECT SUM("${uretimCol}") AS toplam_uretim, SUM("${alanCol}") AS toplam_alan FROM ${TABLE} WHERE "${ilCol}"='${escapeSQL(il)}' AND ${likeHead} ${yearFilter} ${catFilter}`.trim().replace(/\s+/g, ' ');
+    console.log(`🔧 Üretilen SQL: ${sql}`);
+    return sql;
   }
   
   // Türkiye geneli sorguları
   if ((urun || kat) && /türkiye|toplam|genel/.test(nl) && /üretim/.test(nl)) {
-    console.log('Türkiye geneli sorgusu tespit edildi');
-    let whereClause = yearFilter.replace('AND ', '');
+    console.log('✅ Türkiye geneli sorgusu tespit edildi');
+    let whereClause = `"${yilCol}"=${DEFAULT_YEAR}`;
     
     if (urun) {
       const likeHead = headMatchExpr(urun, urunCol);
@@ -237,28 +232,20 @@ function ruleBasedSql(nlRaw, schema) {
       whereClause += ` AND "${catCol}"='${escapeSQL(kat)}'`;
     }
     
-    return `
-      SELECT SUM("${uretimCol}") AS toplam_uretim
-      FROM ${TABLE}
-      WHERE ${whereClause}
-    `.trim().replace(/\s+/g, ' ');
+    const sql = `SELECT SUM("${uretimCol}") AS toplam_uretim FROM ${TABLE} WHERE ${whereClause}`.trim().replace(/\s+/g, ' ');
+    console.log(`🔧 Üretilen SQL: ${sql}`);
+    return sql;
   }
   
   // En çok üretilen ürünler
   if (/en (çok|fazla).*üret/.test(nl) && il) {
-    console.log('En çok üretilen sorgusu tespit edildi');
-    return `
-      SELECT "${urunCol}" AS urun, SUM("${uretimCol}") AS toplam_uretim
-      FROM ${TABLE}
-      WHERE "${ilCol}"='${escapeSQL(il)}'
-        ${yearFilter}
-        ${catFilter}
-      GROUP BY "${urunCol}"
-      ORDER BY toplam_uretim DESC
-      LIMIT 10
-    `.trim().replace(/\s+/g, ' ');
+    console.log('✅ En çok üretilen sorgusu tespit edildi');
+    const sql = `SELECT "${urunCol}" AS urun, SUM("${uretimCol}") AS toplam_uretim FROM ${TABLE} WHERE "${ilCol}"='${escapeSQL(il)}' ${yearFilter} ${catFilter} GROUP BY "${urunCol}" ORDER BY toplam_uretim DESC LIMIT 10`.trim().replace(/\s+/g, ' ');
+    console.log(`🔧 Üretilen SQL: ${sql}`);
+    return sql;
   }
   
+  console.log('❌ Hiçbir kural eşleşmedi');
   return '';
 }
 
