@@ -70,8 +70,21 @@ function parseQuery(text) {
   }
   
   if (!il) log('❌ İl bulunamadı!');
+  // İlçe tespit - temel ilçeler
+  let ilce = '';
+  const temelIlceler = [
+    'Merkez','Akdeniz','Mezitli','Yenişehir','Toroslar','Seyhan','Sarıçam','Çukurova','Karataş'
+  ];
   
-  // Ürün tespit - doğal dil varyasyonları
+  for (const ilceAdi of temelIlceler) {
+    if (text.toLowerCase().includes(ilceAdi.toLowerCase())) {
+      ilce = ilceAdi;
+      log('✅ İlçe bulundu:', ilce);
+      break;
+    }
+  }
+  
+  if (!ilce) log('❌ İlçe bulunamadı!');
   const urunler = [
     'domates','biber','patlıcan','kabak','hıyar','lahana','marul','soğan','patates',
     'elma','portakal','üzüm','muz','çilek','kayısı','şeftali','armut','kiraz',
@@ -139,30 +152,44 @@ function parseQuery(text) {
   // Sorgu tipi tespit - doğal dil desteği
   let tip = 'toplam';
   
+  // Hem üretim hem alan isteniyorsa toplam
+  const uretimVar = t.includes('üretim') || t.includes('miktar') || t.includes('ton');
+  const alanVar = t.includes('alan') || t.includes('ekim') || t.includes('dekar');
+  
+  if (uretimVar && alanVar) {
+    tip = 'toplam'; // Her ikisi de
+    log('✅ Tip: toplam (üretim + alan)');
+  }
+  // Sadece alan isteniyorsa
+  else if (alanVar && !uretimVar) {
+    tip = 'alan';
+    log('✅ Tip: alan');
+  }
   // İlçe/lokasyon sorguları
-  if (t.includes('ilçe') || t.includes('nerede') || t.includes('hangi ilçe') || 
-      t.includes('bölge') || t.includes('yerde')) {
+  else if (t.includes('ilçe') || t.includes('nerede') || t.includes('hangi ilçe') || 
+           t.includes('bölge') || t.includes('yerde')) {
     tip = 'ilce_detay';
+    log('✅ Tip: ilçe_detay');
   }
   // Ranking sorguları  
   else if (t.includes('en çok') || t.includes('hangi') || t.includes('en fazla') ||
            t.includes('sırala') || t.includes('listele') || t.includes('top') ||
            t.includes('önde gelen') || t.includes('başta') || t.includes('lider')) {
     tip = 'ranking';
-  }
-  // Alan sorguları
-  else if (t.includes('alan') || t.includes('ekim') || t.includes('ekilen') ||
-           t.includes('dekar') || t.includes('hektar') || t.includes('arazı')) {
-    tip = 'alan';
+    log('✅ Tip: ranking');
   }
   // Karşılaştırma sorguları
   else if (t.includes('karşılaştır') || t.includes('fark') || t.includes('daha') ||
            t.includes('versus') || t.includes('ile')) {
     tip = 'compare';
+    log('✅ Tip: compare');
+  }
+  else {
+    log('✅ Tip: toplam (varsayılan)');
   }
   
-  log('🔍 Parse sonucu:', { il, urun, kategori, yil, tip });
-  return { il, urun, kategori, yil, tip };
+  log('🔍 Parse sonucu:', { il, ilce, urun, kategori, yil, tip });
+  return { il, ilce, urun, kategori, yil, tip };
 }
 
 /** ======= Ürün Eşleştirme ======= **/
@@ -182,17 +209,19 @@ function buildUrunFilter(urun, schema) {
 
 /** ======= SQL Builder ======= **/
 function buildSQL(parsed, schema) {
-  const { il, urun, kategori, yil, tip } = parsed;
+  const { il, ilce, urun, kategori, yil, tip } = parsed;
   const { schema: s } = schema;
   
   // WHERE koşulları
   const wheres = [`"${s.yil}" = ${yil}`];
   
   if (il) wheres.push(`"${s.il}" = '${escape(il)}'`);
+  if (ilce) wheres.push(`"${s.ilce}" = '${escape(ilce)}'`);
   if (kategori) wheres.push(`"${s.kategori}" = '${escape(kategori)}'`);
   if (urun) wheres.push(buildUrunFilter(urun, s));
   
   const whereStr = wheres.join(' AND ');
+  log('🔧 WHERE koşulları:', whereStr);
   
   // SQL templates
   switch (tip) {
