@@ -245,6 +245,28 @@ function ruleBasedSql(nlRaw, schema) {
     return sql;
   }
   
+  // *** YENİ: Hangi ilçelerde sorguları ***
+  if (/hangi.*ilçe/.test(nl) && il) {
+    console.log('✅ İlçe bazında sorgu tespit edildi');
+    let sql = '';
+    
+    if (urun) {
+      // Spesifik ürün için ilçe bazında
+      const likeHead = headMatchExpr(urun, urunCol);
+      sql = `SELECT "${ilceCol}" AS ilce, SUM("${uretimCol}") AS toplam_uretim FROM ${TABLE} WHERE "${ilCol}"='${escapeSQL(il)}' AND ${likeHead} ${yearFilter} GROUP BY "${ilceCol}" ORDER BY toplam_uretim DESC LIMIT 10`;
+    } else if (kat) {
+      // Kategori için ilçe bazında
+      sql = `SELECT "${ilceCol}" AS ilce, SUM("${uretimCol}") AS toplam_uretim FROM ${TABLE} WHERE "${ilCol}"='${escapeSQL(il)}' ${catFilter} ${yearFilter} GROUP BY "${ilceCol}" ORDER BY toplam_uretim DESC LIMIT 10`;
+    } else {
+      // Genel ilçe bazında
+      sql = `SELECT "${ilceCol}" AS ilce, SUM("${uretimCol}") AS toplam_uretim FROM ${TABLE} WHERE "${ilCol}"='${escapeSQL(il)}' ${yearFilter} GROUP BY "${ilceCol}" ORDER BY toplam_uretim DESC LIMIT 10`;
+    }
+    
+    sql = sql.trim().replace(/\s+/g, ' ');
+    console.log(`🔧 Üretilen SQL: ${sql}`);
+    return sql;
+  }
+  
   console.log('❌ Hiçbir kural eşleşmedi');
   return '';
 }
