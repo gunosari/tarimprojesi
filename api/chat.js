@@ -21,8 +21,17 @@ const escape = (s) => clean(s).replace(/'/g, "''");
 // Debug log
 const log = (...args) => DEBUG && console.log('🔧', ...args);
 
+// Global cache for schema data
+let GLOBAL_SCHEMA_CACHE = null;
+
 /** ======= Kolon Tespiti ======= **/
 function getSchema(db) {
+  // Eğer cache varsa direkt döndür
+  if (GLOBAL_SCHEMA_CACHE) {
+    log('✅ Schema cache kullanıldı');
+    return GLOBAL_SCHEMA_CACHE;
+  }
+  
   try {
     const stmt = db.prepare(`PRAGMA table_info("${TABLE}");`);
     const cols = [];
@@ -40,13 +49,37 @@ function getSchema(db) {
       alan: 'uretim_alani'
     };
     
-    log('Kolonlar:', cols.join(', '));
-    return { cols, schema };
+    // Tüm il ve ilçeleri çek - SADECE İLK SEFERDE
+    const iller = new Set();
+    const ilceler = new Set();
+    
+    log('🔄 İl/İlçe listesi veritabanından çekiliyor...');
+    const dataStmt = db.prepare(`SELECT DISTINCT "${schema.il}", "${schema.ilce}" FROM ${TABLE}`);
+    while (dataStmt.step()) {
+      const row = dataStmt.getAsObject();
+      if (row.il) iller.add(row.il);
+      if (row.ilce) ilceler.add(row.ilce);
+    }
+    dataStmt.free();
+    
+    // Cache'e kaydet
+    GLOBAL_SCHEMA_CACHE = { 
+      cols, 
+      schema, 
+      iller: Array.from(iller), 
+      ilceler: Array.from(ilceler) 
+    };
+    
+    log('✅ Schema cache oluşturuldu - İl:', iller.size, 'İlçe:', ilceler.size);
+    return GLOBAL_SCHEMA_CACHE;
+    
   } catch (e) {
     log('Schema hatası:', e);
     return { 
       cols: ['il','ilce','urun_adi','urun_cesidi','yil','uretim_miktari','uretim_alani'],
-      schema: { il:'il', ilce:'ilce', urun:'urun_adi', kategori:'urun_cesidi', yil:'yil', uretim:'uretim_miktari', alan:'uretim_alani' }
+      schema: { il:'il', ilce:'ilce', urun:'urun_adi', kategori:'urun_cesidi', yil:'yil', uretim:'uretim_miktari', alan:'uretim_alani' },
+      iller: [],
+      ilceler: []
     };
   }
 }
@@ -70,10 +103,13 @@ function parseQuery(text) {
   }
   
   if (!il) log('❌ İl bulunamadı!');
-  // İlçe tespit - temel ilçeler
+  // İlçe tespit - Mersin ilçeleri dahil
   let ilce = '';
   const temelIlceler = [
-    'Merkez','Akdeniz','Mezitli','Yenişehir','Toroslar','Seyhan','Sarıçam','Çukurova','Karataş'
+    // Mersin ilçeleri
+    'Anamur','Aydıncık','Bozyazı','Çamlıyayla','Erdemli','Gülnar','Mezitli','Mut','Silifke','Tarsus','Toroslar','Yenişehir','Akdeniz',
+    // Diğer büyük ilçeler
+    'Merkez','Seyhan','Sarıçam','Çukurova','Karataş'
   ];
   
   for (const ilceAdi of temelIlceler) {
@@ -209,9 +245,9 @@ function buildUrunFilter(urun, schema) {
 }
 
 /** ======= SQL Builder ======= **/
-function buildSQL(parsed, schema) {
+function buildSQL(parsed, schemaObj) {
   const { il, ilce, urun, kategori, yil, tip } = parsed;
-  const { schema: s } = schema;
+  const { schema: s } = schemaObj;
   
   // WHERE koşulları
   const wheres = [`"${s.yil}" = ${yil}`];
@@ -275,11 +311,11 @@ function isSafe(sql) {
 }
 
 /** ======= GPT Fallback ======= **/
-async function gptQuery(question, schema) {
+async function gptQuery(question, schemaObj) {
   if (!process.env.OPENAI_API_KEY) return null;
   
   const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-  const { schema: s } = schema;
+  const { schema: s } = schemaObj;
   
   try {
     const response = await openai.chat.completions.create({
@@ -364,7 +400,7 @@ export default async function handler(req, res) {
     const schema = getSchema(db);
     
     // Query parse ve SQL oluştur
-    const parsed = parseQuery(q);
+    const parsed = parseQuery(q, { iller: schema.iller, ilceler: schema.ilceler });
     let sql = buildSQL(parsed, schema);
     let method = 'rules';
     
