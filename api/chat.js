@@ -189,26 +189,32 @@ function ruleBasedSql(nlRaw, schema) {
   
   console.log(`🔍 Tespit edilen: il="${il}", urun="${urun}", kat="${kat}", yil="${year}"`);
   
-  // Filtreler oluştur
-  const yearFilter = year ? `AND "${yilCol}"=${Number(year)}` : '';
-  const catFilter = (kat && catCol) ? `AND "${catCol}"='${escapeSQL(kat)}'` : '';
-  const ilFilter = il ? `"${ilCol}"='${escapeSQL(il)}'` : '';
+  // WHERE koşulları oluştur
+  const conditions = [];
+  
+  if (il) conditions.push(`"${ilCol}" = '${escapeSQL(il)}'`);
+  if (year) conditions.push(`"${yilCol}" = ${Number(year)}`);
+  if (kat && catCol) conditions.push(`"${catCol}" = '${escapeSQL(kat)}'`);
   
   // 1. TEMEL TÜRKIYE GENELİ SORGULAR
   if (!il && /türkiye|toplam|genel/i.test(nl)) {
     if (urun) {
       // "Türkiye'de domates üretimi"
       const likeExpr = headMatchExpr(urun, urunCol);
-      return `SELECT SUM("${uretimCol}") AS toplam_uretim, SUM("${alanCol}") AS toplam_alan 
-              FROM ${TABLE} WHERE ${likeExpr} ${yearFilter} ${catFilter}`;
+      conditions.push(likeExpr);
+      let sql = `SELECT SUM("${uretimCol}") AS toplam_uretim, SUM("${alanCol}") AS toplam_alan FROM ${TABLE}`;
+      if (conditions.length) sql += ` WHERE ${conditions.join(' AND ')}`;
+      return autoYear(sql, yilCol);
     } else if (kat) {
       // "Türkiye'de sebze üretimi"
-      return `SELECT SUM("${uretimCol}") AS toplam_uretim, SUM("${alanCol}") AS toplam_alan 
-              FROM ${TABLE} WHERE ${catFilter} ${yearFilter}`;
+      let sql = `SELECT SUM("${uretimCol}") AS toplam_uretim, SUM("${alanCol}") AS toplam_alan FROM ${TABLE}`;
+      if (conditions.length) sql += ` WHERE ${conditions.join(' AND ')}`;
+      return autoYear(sql, yilCol);
     } else {
       // "Türkiye toplam üretim"
-      return `SELECT SUM("${uretimCol}") AS toplam_uretim, SUM("${alanCol}") AS toplam_alan 
-              FROM ${TABLE} WHERE 1=1 ${yearFilter}`;
+      let sql = `SELECT SUM("${uretimCol}") AS toplam_uretim, SUM("${alanCol}") AS toplam_alan FROM ${TABLE}`;
+      if (conditions.length) sql += ` WHERE ${conditions.join(' AND ')}`;
+      return autoYear(sql, yilCol);
     }
   }
   
@@ -217,16 +223,19 @@ function ruleBasedSql(nlRaw, schema) {
     // İl + ürün
     if (urun) {
       const likeExpr = headMatchExpr(urun, urunCol);
+      conditions.push(likeExpr);
       
       if (/ilçe|bölge|nerede/i.test(nl)) {
         // "Mersin'de domates hangi ilçelerde üretiliyor?"
-        return `SELECT "${ilceCol}", SUM("${uretimCol}") AS toplam_uretim 
-                FROM ${TABLE} WHERE ${ilFilter} AND ${likeExpr} ${yearFilter} ${catFilter}
-                GROUP BY "${ilceCol}" ORDER BY toplam_uretim DESC`;
+        let sql = `SELECT "${ilceCol}", SUM("${uretimCol}") AS toplam_uretim FROM ${TABLE}`;
+        if (conditions.length) sql += ` WHERE ${conditions.join(' AND ')}`;
+        sql += ` GROUP BY "${ilceCol}" ORDER BY toplam_uretim DESC`;
+        return autoYear(sql, yilCol);
       } else {
         // "Mersin domates üretimi"
-        return `SELECT SUM("${uretimCol}") AS toplam_uretim, SUM("${alanCol}") AS toplam_alan 
-                FROM ${TABLE} WHERE ${ilFilter} AND ${likeExpr} ${yearFilter} ${catFilter}`;
+        let sql = `SELECT SUM("${uretimCol}") AS toplam_uretim, SUM("${alanCol}") AS toplam_alan FROM ${TABLE}`;
+        if (conditions.length) sql += ` WHERE ${conditions.join(' AND ')}`;
+        return autoYear(sql, yilCol);
       }
     }
     
@@ -234,13 +243,15 @@ function ruleBasedSql(nlRaw, schema) {
     else if (kat) {
       if (/ilçe|bölge|nerede/i.test(nl)) {
         // "Mersin'de sebze hangi ilçelerde üretiliyor?"
-        return `SELECT "${ilceCol}", SUM("${uretimCol}") AS toplam_uretim 
-                FROM ${TABLE} WHERE ${ilFilter} ${catFilter} ${yearFilter}
-                GROUP BY "${ilceCol}" ORDER BY toplam_uretim DESC`;
+        let sql = `SELECT "${ilceCol}", SUM("${uretimCol}") AS toplam_uretim FROM ${TABLE}`;
+        if (conditions.length) sql += ` WHERE ${conditions.join(' AND ')}`;
+        sql += ` GROUP BY "${ilceCol}" ORDER BY toplam_uretim DESC`;
+        return autoYear(sql, yilCol);
       } else {
         // "Mersin sebze üretimi"
-        return `SELECT SUM("${uretimCol}") AS toplam_uretim, SUM("${alanCol}") AS toplam_alan 
-                FROM ${TABLE} WHERE ${ilFilter} ${catFilter} ${yearFilter}`;
+        let sql = `SELECT SUM("${uretimCol}") AS toplam_uretim, SUM("${alanCol}") AS toplam_alan FROM ${TABLE}`;
+        if (conditions.length) sql += ` WHERE ${conditions.join(' AND ')}`;
+        return autoYear(sql, yilCol);
       }
     }
     
@@ -248,17 +259,20 @@ function ruleBasedSql(nlRaw, schema) {
     else {
       if (/en çok|hangi.*üretil|çeşit/i.test(nl)) {
         // "Mersin'de en çok hangi ürün üretiliyor?"
-        return `SELECT "${urunCol}", SUM("${uretimCol}") AS toplam_uretim 
-                FROM ${TABLE} WHERE ${ilFilter} ${yearFilter}
-                GROUP BY "${urunCol}" ORDER BY toplam_uretim DESC LIMIT 10`;
+        let sql = `SELECT "${urunCol}", SUM("${uretimCol}") AS toplam_uretim FROM ${TABLE}`;
+        if (conditions.length) sql += ` WHERE ${conditions.join(' AND ')}`;
+        sql += ` GROUP BY "${urunCol}" ORDER BY toplam_uretim DESC LIMIT 10`;
+        return autoYear(sql, yilCol);
       } else if (/alan|ekim/i.test(nl)) {
         // "Mersin toplam ekim alanı"
-        return `SELECT SUM("${alanCol}") AS toplam_alan 
-                FROM ${TABLE} WHERE ${ilFilter} ${yearFilter}`;
+        let sql = `SELECT SUM("${alanCol}") AS toplam_alan FROM ${TABLE}`;
+        if (conditions.length) sql += ` WHERE ${conditions.join(' AND ')}`;
+        return autoYear(sql, yilCol);
       } else {
         // "Mersin toplam üretim"
-        return `SELECT SUM("${uretimCol}") AS toplam_uretim, SUM("${alanCol}") AS toplam_alan 
-                FROM ${TABLE} WHERE ${ilFilter} ${yearFilter}`;
+        let sql = `SELECT SUM("${uretimCol}") AS toplam_uretim, SUM("${alanCol}") AS toplam_alan FROM ${TABLE}`;
+        if (conditions.length) sql += ` WHERE ${conditions.join(' AND ')}`;
+        return autoYear(sql, yilCol);
       }
     }
   }
@@ -266,16 +280,19 @@ function ruleBasedSql(nlRaw, schema) {
   // 3. SADECE ÜRÜN SORGUSU
   if (urun && !il) {
     const likeExpr = headMatchExpr(urun, urunCol);
+    conditions.push(likeExpr);
     
     if (/hangi.*il|nerede.*üretil/i.test(nl)) {
       // "Domates hangi illerde üretiliyor?"
-      return `SELECT "${ilCol}", SUM("${uretimCol}") AS toplam_uretim 
-              FROM ${TABLE} WHERE ${likeExpr} ${yearFilter} ${catFilter}
-              GROUP BY "${ilCol}" ORDER BY toplam_uretim DESC LIMIT 10`;
+      let sql = `SELECT "${ilCol}", SUM("${uretimCol}") AS toplam_uretim FROM ${TABLE}`;
+      if (conditions.length) sql += ` WHERE ${conditions.join(' AND ')}`;
+      sql += ` GROUP BY "${ilCol}" ORDER BY toplam_uretim DESC LIMIT 10`;
+      return autoYear(sql, yilCol);
     } else {
       // "Domates üretimi"
-      return `SELECT SUM("${uretimCol}") AS toplam_uretim, SUM("${alanCol}") AS toplam_alan 
-              FROM ${TABLE} WHERE ${likeExpr} ${yearFilter} ${catFilter}`;
+      let sql = `SELECT SUM("${uretimCol}") AS toplam_uretim, SUM("${alanCol}") AS toplam_alan FROM ${TABLE}`;
+      if (conditions.length) sql += ` WHERE ${conditions.join(' AND ')}`;
+      return autoYear(sql, yilCol);
     }
   }
   
@@ -283,29 +300,33 @@ function ruleBasedSql(nlRaw, schema) {
   if (kat && !il && !urun) {
     if (/hangi.*il|nerede.*üretil/i.test(nl)) {
       // "Sebze hangi illerde üretiliyor?"
-      return `SELECT "${ilCol}", SUM("${uretimCol}") AS toplam_uretim 
-              FROM ${TABLE} WHERE ${catFilter} ${yearFilter}
-              GROUP BY "${ilCol}" ORDER BY toplam_uretim DESC LIMIT 10`;
+      let sql = `SELECT "${ilCol}", SUM("${uretimCol}") AS toplam_uretim FROM ${TABLE}`;
+      if (conditions.length) sql += ` WHERE ${conditions.join(' AND ')}`;
+      sql += ` GROUP BY "${ilCol}" ORDER BY toplam_uretim DESC LIMIT 10`;
+      return autoYear(sql, yilCol);
     } else {
       // "Sebze üretimi"
-      return `SELECT SUM("${uretimCol}") AS toplam_uretim, SUM("${alanCol}") AS toplam_alan 
-              FROM ${TABLE} WHERE ${catFilter} ${yearFilter}`;
+      let sql = `SELECT SUM("${uretimCol}") AS toplam_uretim, SUM("${alanCol}") AS toplam_alan FROM ${TABLE}`;
+      if (conditions.length) sql += ` WHERE ${conditions.join(' AND ')}`;
+      return autoYear(sql, yilCol);
     }
   }
   
   // 5. GENEL SORGULAR
   if (/en çok.*üretilen|hangi.*ürün|popüler/i.test(nl)) {
     // "En çok üretilen ürünler"
-    return `SELECT "${urunCol}", SUM("${uretimCol}") AS toplam_uretim 
-            FROM ${TABLE} WHERE 1=1 ${yearFilter}
-            GROUP BY "${urunCol}" ORDER BY toplam_uretim DESC LIMIT 10`;
+    let sql = `SELECT "${urunCol}", SUM("${uretimCol}") AS toplam_uretim FROM ${TABLE}`;
+    if (conditions.length) sql += ` WHERE ${conditions.join(' AND ')}`;
+    sql += ` GROUP BY "${urunCol}" ORDER BY toplam_uretim DESC LIMIT 10`;
+    return autoYear(sql, yilCol);
   }
   
   if (/en çok.*il|hangi.*il/i.test(nl)) {
     // "En çok üretim yapan iller"
-    return `SELECT "${ilCol}", SUM("${uretimCol}") AS toplam_uretim 
-            FROM ${TABLE} WHERE 1=1 ${yearFilter}
-            GROUP BY "${ilCol}" ORDER BY toplam_uretim DESC LIMIT 10`;
+    let sql = `SELECT "${ilCol}", SUM("${uretimCol}") AS toplam_uretim FROM ${TABLE}`;
+    if (conditions.length) sql += ` WHERE ${conditions.join(' AND ')}`;
+    sql += ` GROUP BY "${ilCol}" ORDER BY toplam_uretim DESC LIMIT 10`;
+    return autoYear(sql, yilCol);
   }
   
   console.log('🚫 Hiçbir kural eşleşmedi');
