@@ -8,19 +8,23 @@ import OpenAI from 'openai';
 /** ======= Ayarlar ======= **/
 const TABLE = 'urunler';
 const MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
-const DEFAULT_YEAR = 2024; // veriniz tek yıl ise burada ayarlayın
-const AUTO_INJECT_DEFAULT_YEAR = true; // doğal cümlede yıl yoksa otomatik bu yılı ekle
-const FORCE_GPT_ONLY = false; // sadece GPT çıktısını test etmek istersen true yap
-const DEBUG_ROWS = true; // debug metni açık/kapat
+const DEFAULT_YEAR = 2024;
+const AUTO_INJECT_DEFAULT_YEAR = true;
+const FORCE_GPT_ONLY = false;
+const DEBUG_ROWS = true;
+
+// Cache sistemi
+const queryCache = new Map();
+const MAX_CACHE_SIZE = 300;
 
 /** ======= Yardımcılar ======= **/
 const escapeSQL = (s = '') => String(s).replace(/'/g, "''");
+
 function qToText(rows, lineFmt) {
   if (!rows || rows.length === 0) return 'Veri bulunamadı.';
   return rows.map(lineFmt).join('\n');
 }
 
-// PRAGMA ile tablo kolonlarını oku (dinamik şema)
 function getColumns(SQL, db) {
   try {
     const out = [];
@@ -28,24 +32,17 @@ function getColumns(SQL, db) {
     while (stmt.step()) {
       const row = stmt.getAsObject();
       out.push(row.name);
-      console.log('Kolon bulundu:', row.name, '- Tür:', row.type); // Debug
     }
     stmt.free();
     
-    // Kategori kolonu belirle (önce Kategori, sonra urun_cesidi)
     let catCol = null;
-    if (out.includes('kategori')) catCol = 'kategori';
-    else if (out.includes('urun_cesidi')) catCol = 'urun_cesidi';
+    if (out.includes('urun_cesidi')) catCol = 'urun_cesidi';
+    else if (out.includes('kategori')) catCol = 'kategori';
     else if (out.includes('Kategori')) catCol = 'Kategori';
-    else if (out.includes('Ürün Çeşidi')) catCol = 'Ürün Çeşidi';
-    
-    console.log('Kategori kolonu:', catCol); // Debug
-    console.log('Tüm kolonlar:', out.join(', ')); // Debug
     
     return { columns: out, catCol };
   } catch (e) {
     console.error('Şema okuma hatası:', e);
-    // Varsayılan şema (güvenlik için)
     return {
       columns: ['il', 'ilce', 'urun_cesidi', 'urun_adi', 'yil', 'uretim_alani', 'uretim_miktari', 'verim'],
       catCol: 'urun_cesidi'
@@ -53,7 +50,6 @@ function getColumns(SQL, db) {
   }
 }
 
-// Basit güvenlik filtresi
 function makeIsSafeSql(allowedNames) {
   const allow = new Set([...allowedNames.map(s => s.toLowerCase()), TABLE]);
   
@@ -61,32 +57,26 @@ function makeIsSafeSql(allowedNames) {
     const s = (sql || '').trim().toLowerCase();
     if (!s.startsWith('select')) return false;
     if (s.includes('--') || s.includes('/*')) return false;
-    if (s.includes(';')) return false; // Çoklu sorgu engelle
+    if (s.includes(';')) return false;
     
-    // SQL anahtar kelimeleri
     const sqlKeywords = [
       'select', 'sum', 'avg', 'count', 'min', 'max', 'round', 'case', 'when', 'then', 'else', 'end',
       'from', 'where', 'and', 'or', 'group', 'by', 'order', 'desc', 'asc', 'limit', 'as', 
       'having', 'like', 'between', 'in', 'distinct', 'null', 'not', 'is'
     ];
     
-    // Token analizi
     const tokens = s.replace(/[^a-z0-9_ğüşöçıİĞÜŞÖÇ" ]/gi, ' ')
                    .split(/\s+/)
                    .filter(t => t.length > 0);
     
     for (const token of tokens) {
-      // Sayıları atla
       if (/^\d+(\.\d+)?$/.test(token)) continue;
-      
-      // String literalleri atla ('')
       if (/^'.*'$/.test(token)) continue;
       
-      // Alfanumerik kontrol
       if (/^[a-zıiöüçğ_"]+$/i.test(token)) {
         const cleanToken = token.replace(/"/g, '');
         if (!allow.has(cleanToken) && !sqlKeywords.includes(cleanToken)) {
-          console.log('Güvensiz token:', token);
+          console.log('🚫 Güvensiz token:', token);
           return false;
         }
       }
@@ -96,35 +86,22 @@ function makeIsSafeSql(allowedNames) {
   };
 }
 
-/** ======= GPT Katmanı ======= **/
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-
-// *** SON DÜZELTİLMİŞ ÜRÜN EŞLEŞME FONKSİYONU ***
+/** ======= Hibrit Ürün Eşleştirme ======= **/
 function headMatchExpr(raw, urunCol = 'urun_adi') {
   const product = String(raw || '').trim().toLowerCase();
   
-  // TÜİK'te çeşitlendirilen ürünlerin tam listesi (Excel'den çıkarılan)
   const multiVarietyProducts = [
-    // Sebzeler
     'biber', 'domates', 'hıyar', 'kabak', 'lahana', 'marul', 'soğan', 'sarımsak', 
-    'turp', 'kereviz',
-    // Meyveler  
-    'elma', 'portakal', 'mandalina', 'üzüm',
-    // Baklagiller
-    'fasulye', 'bakla', 'bezelye', 'börülce', 'mercimek',
-    // Tahıllar
-    'mısır', 'arpa', 'yulaf', 'çavdar',
-    // Diğer önemli çeşitli ürünler
-    'pamuk', 'ayçiçeği', 'şeker', 'fiğ', 'yonca', 'haşhaş'
+    'turp', 'kereviz', 'elma', 'portakal', 'mandalina', 'üzüm', 'fasulye', 
+    'bakla', 'bezelye', 'börülce', 'mercimek', 'mısır', 'arpa', 'yulaf', 
+    'çavdar', 'pamuk', 'ayçiçeği', 'şeker', 'fiğ', 'yonca', 'haşhaş'
   ];
   
-  // Eğer çok çeşitli bir ürünse, hibrit arama (başta + içinde)
   if (multiVarietyProducts.includes(product)) {
     const productCapitalized = product.charAt(0).toUpperCase() + product.slice(1);
     return `("${urunCol}" LIKE '${escapeSQL(productCapitalized)} %' OR "${urunCol}" LIKE '%${escapeSQL(productCapitalized)}%')`;
   }
   
-  // Diğer ürünler için dar arama (eski sistem)
   const head = raw.charAt(0).toUpperCase() + raw.slice(1).toLowerCase();
   return `("${urunCol}" LIKE '${escapeSQL(head)} %' OR "${urunCol}"='${escapeSQL(head)}')`;
 }
@@ -148,10 +125,12 @@ function autoYear(sql, yilCol = 'yil') {
   }
 }
 
-async function nlToSql_gpt(nl, schema) {
-  if (!process.env.OPENAI_API_KEY) return '';
-  
+/** ======= Gelişmiş Kural Tabanlı Sistem ======= **/
+function ruleBasedSql(nlRaw, schema) {
+  const nl = String(nlRaw || '').trim().toLowerCase();
   const { columns, catCol } = schema;
+  
+  console.log(`🔍 Kural analizi başlıyor: "${nlRaw}"`);
   
   // Dinamik kolon tespiti
   const ilCol = columns.find(c => ['il', 'İl', 'province'].includes(c)) || 'il';
@@ -162,6 +141,192 @@ async function nlToSql_gpt(nl, schema) {
   const alanCol = columns.find(c => ['uretim_alani', 'alan', 'Alan', 'area'].includes(c)) || 'uretim_alani';
   const verimCol = columns.find(c => ['verim', 'Verim', 'yield'].includes(c)) || 'verim';
   
+  // İl tespit et - daha geniş pattern
+  let il = '';
+  const ilPatterns = [
+    /([A-ZÇĞİÖŞÜ][a-zçğıöşü]+)(?:\s+il[inde]*|[''`´]?[dt]e|[''`´]?[dt]a|\s|$)/,
+    /([A-ZÇĞİÖŞÜ][a-zçğıöşü]+)(?:'de|'da|'te|'ta|de|da|te|ta)/,
+    /([A-ZÇĞİÖŞÜ][a-zçğıöşü]+)(?:\s+ili|\s|$)/
+  ];
+  
+  for (const pattern of ilPatterns) {
+    const match = nlRaw.match(pattern);
+    if (match) {
+      il = match[1];
+      break;
+    }
+  }
+  
+  // Yıl tespit et
+  const yearMatch = nl.match(/\b(19\d{2}|20\d{2})\b/);
+  const year = yearMatch ? yearMatch[1] : '';
+  
+  // Ürün tespit et - genişletilmiş liste
+  const knownProducts = [
+    'domates', 'biber', 'patlıcan', 'kabak', 'hıyar', 'salatalık', 'karpuz', 
+    'karnabahar', 'lahana', 'marul', 'fasulye', 'soğan', 'sarımsak', 'patates', 
+    'brokoli', 'ispanak', 'maydanoz', 'enginar', 'bezelye', 'bakla', 'elma', 
+    'portakal', 'mandalina', 'limon', 'muz', 'zeytin', 'üzüm', 'armut', 
+    'şeftali', 'kayısı', 'nar', 'incir', 'vişne', 'çilek', 'kiraz', 'kavun', 
+    'ayva', 'fındık', 'ceviz', 'antep fıstığı', 'buğday', 'arpa', 'mısır', 
+    'çeltik', 'pirinç', 'yulaf', 'çavdar', 'ayçiçeği', 'kanola', 'pamuk'
+  ];
+  
+  let urun = '';
+  for (const product of knownProducts) {
+    if (nl.includes(product)) {
+      urun = product;
+      break;
+    }
+  }
+  
+  // Kategori tespit et
+  let kat = '';
+  if (/meyve|meyva/i.test(nl)) kat = 'Meyve';
+  else if (/tah[ıi]l/i.test(nl)) kat = 'Tahıl';  
+  else if (/sebze/i.test(nl)) kat = 'Sebze';
+  else if (/baklagil/i.test(nl)) kat = 'Baklagil';
+  
+  console.log(`🔍 Tespit edilen: il="${il}", urun="${urun}", kat="${kat}", yil="${year}"`);
+  
+  // Filtreler oluştur
+  const yearFilter = year ? `AND "${yilCol}"=${Number(year)}` : '';
+  const catFilter = (kat && catCol) ? `AND "${catCol}"='${escapeSQL(kat)}'` : '';
+  const ilFilter = il ? `"${ilCol}"='${escapeSQL(il)}'` : '';
+  
+  // 1. TEMEL TÜRKIYE GENELİ SORGULAR
+  if (!il && /türkiye|toplam|genel/i.test(nl)) {
+    if (urun) {
+      // "Türkiye'de domates üretimi"
+      const likeExpr = headMatchExpr(urun, urunCol);
+      return `SELECT SUM("${uretimCol}") AS toplam_uretim, SUM("${alanCol}") AS toplam_alan 
+              FROM ${TABLE} WHERE ${likeExpr} ${yearFilter} ${catFilter}`;
+    } else if (kat) {
+      // "Türkiye'de sebze üretimi"
+      return `SELECT SUM("${uretimCol}") AS toplam_uretim, SUM("${alanCol}") AS toplam_alan 
+              FROM ${TABLE} WHERE ${catFilter} ${yearFilter}`;
+    } else {
+      // "Türkiye toplam üretim"
+      return `SELECT SUM("${uretimCol}") AS toplam_uretim, SUM("${alanCol}") AS toplam_alan 
+              FROM ${TABLE} WHERE 1=1 ${yearFilter}`;
+    }
+  }
+  
+  // 2. İL BAZLI SORGULAR
+  if (il) {
+    // İl + ürün
+    if (urun) {
+      const likeExpr = headMatchExpr(urun, urunCol);
+      
+      if (/ilçe|bölge|nerede/i.test(nl)) {
+        // "Mersin'de domates hangi ilçelerde üretiliyor?"
+        return `SELECT "${ilceCol}", SUM("${uretimCol}") AS toplam_uretim 
+                FROM ${TABLE} WHERE ${ilFilter} AND ${likeExpr} ${yearFilter} ${catFilter}
+                GROUP BY "${ilceCol}" ORDER BY toplam_uretim DESC`;
+      } else {
+        // "Mersin domates üretimi"
+        return `SELECT SUM("${uretimCol}") AS toplam_uretim, SUM("${alanCol}") AS toplam_alan 
+                FROM ${TABLE} WHERE ${ilFilter} AND ${likeExpr} ${yearFilter} ${catFilter}`;
+      }
+    }
+    
+    // İl + kategori
+    else if (kat) {
+      if (/ilçe|bölge|nerede/i.test(nl)) {
+        // "Mersin'de sebze hangi ilçelerde üretiliyor?"
+        return `SELECT "${ilceCol}", SUM("${uretimCol}") AS toplam_uretim 
+                FROM ${TABLE} WHERE ${ilFilter} ${catFilter} ${yearFilter}
+                GROUP BY "${ilceCol}" ORDER BY toplam_uretim DESC`;
+      } else {
+        // "Mersin sebze üretimi"
+        return `SELECT SUM("${uretimCol}") AS toplam_uretim, SUM("${alanCol}") AS toplam_alan 
+                FROM ${TABLE} WHERE ${ilFilter} ${catFilter} ${yearFilter}`;
+      }
+    }
+    
+    // Sadece il
+    else {
+      if (/en çok|hangi.*üretil|çeşit/i.test(nl)) {
+        // "Mersin'de en çok hangi ürün üretiliyor?"
+        return `SELECT "${urunCol}", SUM("${uretimCol}") AS toplam_uretim 
+                FROM ${TABLE} WHERE ${ilFilter} ${yearFilter}
+                GROUP BY "${urunCol}" ORDER BY toplam_uretim DESC LIMIT 10`;
+      } else if (/alan|ekim/i.test(nl)) {
+        // "Mersin toplam ekim alanı"
+        return `SELECT SUM("${alanCol}") AS toplam_alan 
+                FROM ${TABLE} WHERE ${ilFilter} ${yearFilter}`;
+      } else {
+        // "Mersin toplam üretim"
+        return `SELECT SUM("${uretimCol}") AS toplam_uretim, SUM("${alanCol}") AS toplam_alan 
+                FROM ${TABLE} WHERE ${ilFilter} ${yearFilter}`;
+      }
+    }
+  }
+  
+  // 3. SADECE ÜRÜN SORGUSU
+  if (urun && !il) {
+    const likeExpr = headMatchExpr(urun, urunCol);
+    
+    if (/hangi.*il|nerede.*üretil/i.test(nl)) {
+      // "Domates hangi illerde üretiliyor?"
+      return `SELECT "${ilCol}", SUM("${uretimCol}") AS toplam_uretim 
+              FROM ${TABLE} WHERE ${likeExpr} ${yearFilter} ${catFilter}
+              GROUP BY "${ilCol}" ORDER BY toplam_uretim DESC LIMIT 10`;
+    } else {
+      // "Domates üretimi"
+      return `SELECT SUM("${uretimCol}") AS toplam_uretim, SUM("${alanCol}") AS toplam_alan 
+              FROM ${TABLE} WHERE ${likeExpr} ${yearFilter} ${catFilter}`;
+    }
+  }
+  
+  // 4. SADECE KATEGORİ SORGUSU
+  if (kat && !il && !urun) {
+    if (/hangi.*il|nerede.*üretil/i.test(nl)) {
+      // "Sebze hangi illerde üretiliyor?"
+      return `SELECT "${ilCol}", SUM("${uretimCol}") AS toplam_uretim 
+              FROM ${TABLE} WHERE ${catFilter} ${yearFilter}
+              GROUP BY "${ilCol}" ORDER BY toplam_uretim DESC LIMIT 10`;
+    } else {
+      // "Sebze üretimi"
+      return `SELECT SUM("${uretimCol}") AS toplam_uretim, SUM("${alanCol}") AS toplam_alan 
+              FROM ${TABLE} WHERE ${catFilter} ${yearFilter}`;
+    }
+  }
+  
+  // 5. GENEL SORGULAR
+  if (/en çok.*üretilen|hangi.*ürün|popüler/i.test(nl)) {
+    // "En çok üretilen ürünler"
+    return `SELECT "${urunCol}", SUM("${uretimCol}") AS toplam_uretim 
+            FROM ${TABLE} WHERE 1=1 ${yearFilter}
+            GROUP BY "${urunCol}" ORDER BY toplam_uretim DESC LIMIT 10`;
+  }
+  
+  if (/en çok.*il|hangi.*il/i.test(nl)) {
+    // "En çok üretim yapan iller"
+    return `SELECT "${ilCol}", SUM("${uretimCol}") AS toplam_uretim 
+            FROM ${TABLE} WHERE 1=1 ${yearFilter}
+            GROUP BY "${ilCol}" ORDER BY toplam_uretim DESC LIMIT 10`;
+  }
+  
+  console.log('🚫 Hiçbir kural eşleşmedi');
+  return '';
+}
+
+/** ======= GPT Katmanı ======= **/
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
+async function nlToSql_gpt(nl, schema) {
+  if (!process.env.OPENAI_API_KEY) return '';
+  
+  const { columns, catCol } = schema;
+  
+  const ilCol = columns.find(c => ['il', 'İl', 'province'].includes(c)) || 'il';
+  const ilceCol = columns.find(c => ['ilce', 'İlçe', 'district'].includes(c)) || 'ilce';
+  const urunCol = columns.find(c => ['urun_adi', 'urun', 'Ürün', 'product'].includes(c)) || 'urun_adi';
+  const yilCol = columns.find(c => ['yil', 'Yıl', 'year'].includes(c)) || 'yil';
+  const uretimCol = columns.find(c => ['uretim_miktari', 'uretim', 'Üretim', 'production'].includes(c)) || 'uretim_miktari';
+  const alanCol = columns.find(c => ['uretim_alani', 'alan', 'Alan', 'area'].includes(c)) || 'uretim_alani';
+  
   const system = `
 Sen bir NL→SQLite SQL çeviricisisin.
 Tek tablo: ${TABLE}("${columns.join('","')}")
@@ -170,7 +335,6 @@ KOLON AÇIKLAMALARI:
 - "${uretimCol}": ton cinsinden üretim
 - "${alanCol}": dekar cinsinden alan  
 - "${yilCol}": yıl (integer)
-- "${verimCol}": ton/dekar verim
 - "${catCol}": kategori kolonu (varsa)
 
 KURALLAR:
@@ -219,66 +383,6 @@ Ana kolonlar: "${ilCol}", "${ilceCol}", "${urunCol}", "${yilCol}", "${uretimCol}
   }
 }
 
-/** ======= Kural Tabanlı Yedek ======= **/
-function ruleBasedSql(nlRaw, schema) {
-  const nl = String(nlRaw || '').trim();
-  const { columns, catCol } = schema;
-  
-  // Dinamik kolon tespiti
-  const ilCol = columns.find(c => ['il', 'İl', 'province'].includes(c)) || 'il';
-  const ilceCol = columns.find(c => ['ilce', 'İlçe', 'district'].includes(c)) || 'ilce';
-  const urunCol = columns.find(c => ['urun_adi', 'urun', 'Ürün', 'product'].includes(c)) || 'urun_adi';
-  const yilCol = columns.find(c => ['yil', 'Yıl', 'year'].includes(c)) || 'yil';
-  const uretimCol = columns.find(c => ['uretim_miktari', 'uretim', 'Üretim', 'production'].includes(c)) || 'uretim_miktari';
-  const alanCol = columns.find(c => ['uretim_alani', 'alan', 'Alan', 'area'].includes(c)) || 'uretim_alani';
-  
-  // İl tespit et - "Mersin ili", "Mersin'de", "Mersinde" hepsini "Mersin" olarak al
-  let il = '';
-  const ilPattern = /([A-ZÇĞİÖŞÜ][a-zçğıöşü]+)(?:\s+il[inde]*|[''`´]?[dt]e|[''`´]?[dt]a|\s|$)/;
-  const mIl = nl.match(ilPattern);
-  if (mIl) {
-    il = mIl[1];
-  }
-  
-  // Yıl tespit et
-  const year = (nl.match(/\b(19\d{2}|20\d{2})\b/) || [])[1] || '';
-  
-  // Ürün tespit et
-  const known = /(domates|biber|patlıcan|kabak|hıyar|salatalık|karpuz|karnabahar|lahana|marul|fasulye|soğan|sarımsak|patates|brokoli|ispanak|maydanoz|enginar|bezelye|bakla|elma|portakal|mandalina|limon|muz|zeytin|üzüm|armut|şeftali|kayısı|nar|incir|vişne|çilek|kiraz|kavun|ayva|fındık|ceviz|antep fıstığı|buğday|arpa|mısır|çeltik|pirinç|yulaf|çavdar|ayçiçeği|kanola)/i;
-  let urun = (nl.match(known) || [])[1] || '';
-  
-  if (!urun) {
-    const mu = nl.match(/([a-zçğıöşü]{3,})\s*(?:ürünü|ürün)?\s*üretimi/i);
-    if (mu) urun = mu[1];
-  }
-  urun = (urun || '').replace(/["''`´]+/g,'').trim();
-  
-  // Kategori tespit et
-  let kat = '';
-  if (/meyve/i.test(nl)) kat = 'Meyve';
-  else if (/tah[ıi]l/i.test(nl)) kat = 'Tahıl';  
-  else if (/sebze/i.test(nl)) kat = 'Sebze';
-  
-  const yearFilter = year ? `AND "${yilCol}"=${Number(year)}` : '';
-  const catFilter = (kat && catCol) ? `AND "${catCol}"='${escapeSQL(kat)}'` : '';
-  
-  // Basit toplam üretim sorgusu (en yaygın)
-  if (il && urun && /üretim/i.test(nl)) {
-    const likeHead = headMatchExpr(urun, urunCol);
-    return `
-      SELECT SUM("${uretimCol}") AS toplam_uretim, SUM("${alanCol}") AS toplam_alan
-      FROM ${TABLE}
-      WHERE "${ilCol}"='${escapeSQL(il)}'
-        AND ${likeHead}
-        ${yearFilter}
-        ${catFilter}
-    `.trim().replace(/\s+/g, ' ');
-  }
-  
-  // Diğer kural sorgularını da ekle...
-  return '';
-}
-
 /** ======= Güzel cevap (opsiyonel GPT) ======= **/
 async function prettyAnswer(question, rows) {
   if (!process.env.OPENAI_API_KEY) {
@@ -319,31 +423,6 @@ async function prettyAnswer(question, rows) {
   }
 }
 
-// DEBUG: Manuel SQL testi fonksiyonu
-function debugManualSQL(db, il, urun) {
-  try {
-    const sql = `SELECT "${urunCol}" AS urun_adi, "${uretimCol}" AS uretim_miktari 
-                 FROM ${TABLE} 
-                 WHERE "il"='${il}' AND "urun_adi" LIKE '%${urun}%'`;
-    
-    console.log('DEBUG Manuel SQL:', sql);
-    
-    const stmt = db.prepare(sql);
-    const results = [];
-    while (stmt.step()) results.push(stmt.getAsObject());
-    stmt.free();
-    
-    const toplam = results.reduce((sum, row) => sum + (row.uretim_miktari || 0), 0);
-    console.log('DEBUG Manuel Toplam:', toplam);
-    console.log('DEBUG Detay Satırlar:', results);
-    
-    return { results, toplam };
-  } catch (e) {
-    console.error('DEBUG Manuel SQL Hatası:', e);
-    return null;
-  }
-}
-
 /** ======= Handler ======= **/
 export default async function handler(req, res) {
   // CORS
@@ -370,6 +449,16 @@ export default async function handler(req, res) {
     
     console.log(`[${new Date().toISOString()}] Sorgu: ${raw}`);
     
+    // Cache kontrolü
+    const cacheKey = raw.toLowerCase();
+    if (queryCache.has(cacheKey)) {
+      console.log('✅ Cache hit!');
+      const cached = queryCache.get(cacheKey);
+      res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+      res.status(200).send(`🧭 Mod: cached\n${cached}`);
+      return;
+    }
+    
     // sql.js başlat
     const SQL = await initSqlJs({
       locateFile: (file) => path.join(process.cwd(), 'node_modules/sql.js/dist', file),
@@ -378,87 +467,91 @@ export default async function handler(req, res) {
     // DB yükle
     const dbPath = path.join(process.cwd(), 'public', 'tarimdb.sqlite');
     if (!fs.existsSync(dbPath)) { 
+      console.error('❌ Database not found:', dbPath);
       res.status(500).json({ ok: false, error: 'tarimdb.sqlite bulunamadı' }); 
       return; 
     }
     
+    console.log('✅ Database bulundu:', dbPath);
     const db = new SQL.Database(fs.readFileSync(dbPath));
     
     // Şema ve güvenlik
     const schema = getColumns(SQL, db);
     const isSafeSql = makeIsSafeSql([TABLE, ...schema.columns.map(c => `"${c}"`)]);
     
-    // *** DEBUG: Manuel kontrol ekle ***
-    if (raw.toLowerCase().includes('mersin') && raw.toLowerCase().includes('lahana')) {
-      const debugResult = debugManualSQL(db, 'Mersin', 'Lahana');
-      if (debugResult) {
-        console.log('=== MANUEL KONTROL ===');
-        console.log('Toplam üretim:', debugResult.toplam);
-      }
-    }
+    console.log('✅ Şema yüklendi:', schema.columns.join(', '));
     
-    // 1) GPT ile dene
-    let used = 'nl2sql-gpt', gptErr = '', sql = '';
+    // RULES-FIRST yaklaşım (maliyet optimizasyonu)
+    let sql = '', used = 'rules', gptErr = '';
     
-    try {
-      sql = await nlToSql_gpt(raw, schema);
-    } catch (e) {
-      gptErr = `${e?.status || e?.code || ''} ${e?.message || String(e)}`;
-      used = 'fallback-rules';
-    }
+    // 1) Önce rule-based dene
+    sql = ruleBasedSql(raw, schema);
+    console.log(`🔧 Rules SQL: ${sql || '(boş)'}`);
     
-    // 2) Güvenli değilse kural tabanlı
+    // 2) Rule-based başarısızsa GPT dene
     if (!sql || !isSafeSql(sql)) {
-      if (FORCE_GPT_ONLY) {
-        res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-        res.status(200).send(`🧭 Mod: gpt-only | GPT SQL geçersiz/boş\nSQL:\n${sql || '(yok)'}`);
-        return;
-      }
-      
-      const rb = ruleBasedSql(raw, schema);
-      if (rb && isSafeSql(rb)) { 
-        sql = rb; 
-        used = 'rules'; 
+      if (!FORCE_GPT_ONLY) {
+        console.log('🤖 GPT deneniyor...');
+        try {
+          sql = await nlToSql_gpt(raw, schema);
+          console.log(`🔧 GPT SQL: ${sql || '(boş)'}`);
+          used = 'gpt';
+        } catch (e) {
+          gptErr = `${e?.status || e?.code || ''} ${e?.message || String(e)}`;
+          console.error('❌ GPT hatası:', gptErr);
+        }
       }
     }
     
-    // 3) Hala SQL yok -> genel fallback
-    if (!sql) {
+    // 3) Hala SQL yok -> hata
+    if (!sql || !isSafeSql(sql)) {
+      const errorMsg = `SQL oluşturulamadı veya güvenli değil.\nRule SQL: ${sql || 'boş'}\nGPT Error: ${gptErr || 'yok'}\nGüvenlik: ${sql ? 'geçmedi' : 'SQL yok'}`;
+      console.error('❌', errorMsg);
       res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-      res.status(400).send('SQL oluşturulamadı. Sorunuzu yeniden formüle edin.');
+      res.status(400).send(errorMsg);
       return;
     }
     
     // 4) SQL çalıştır
     let rows = [];
     try {
-      console.log('Çalıştırılan SQL:', sql);
+      console.log('🚀 SQL çalıştırılıyor:', sql);
       const stmt = db.prepare(sql);
       while (stmt.step()) rows.push(stmt.getAsObject());
       stmt.free();
+      console.log(`✅ ${rows.length} satır bulundu`);
     } catch (e) {
-      console.error('SQL çalıştırma hatası:', e);
+      console.error('❌ SQL çalıştırma hatası:', e);
       res.setHeader('Content-Type', 'text/plain; charset=utf-8');
       res.status(200).send(`🧭 Mod: ${used} (model: ${MODEL})\nSQL derlenemedi.\nSQL:\n${sql}\n\nHata: ${String(e)}`);
       return;
     }
     
-    // 5) Özet + Debug
+    // 5) Özet + Cache + Debug
     const nice = await prettyAnswer(raw, rows);
+    
+    // Cache'e ekle
+    const cacheValue = `Soru: ${raw}\n\n${nice}\n\n${rows.length ? qToText(rows, r => '• ' + JSON.stringify(r)) : 'Veri bulunamadı.'}`;
+    if (queryCache.size >= MAX_CACHE_SIZE) {
+      const firstKey = queryCache.keys().next().value;
+      queryCache.delete(firstKey);
+    }
+    queryCache.set(cacheKey, cacheValue);
+    
     const debugText = DEBUG_ROWS
       ? `\n\n-- DEBUG --\nKolonlar: ${schema.columns.join(', ')}\nKategori kolonu: ${schema.catCol || 'yok'}\nSQL:\n${sql}\nİlk 3 Satır:\n${JSON.stringify(rows.slice(0,3), null, 2)}`
       : '';
     
-    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-    res.status(200).send(
-      `🧭 Mod: ${used} (model: ${MODEL})${gptErr ? ` | gptErr: ${gptErr}` : ''}\n` +
+    const response = `🧭 Mod: ${used} (model: ${MODEL})${gptErr ? ` | gptErr: ${gptErr}` : ''}\n` +
       `Soru: ${raw}\n\n${nice}\n\n` +
       (rows.length ? qToText(rows, r => '• ' + JSON.stringify(r)) : 'Veri bulunamadı.') +
-      debugText
-    );
+      debugText;
+    
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    res.status(200).send(response);
     
   } catch (err) {
-    console.error('API hata:', err);
+    console.error('❌ API hata:', err);
     res.status(500).json({ ok: false, error: 'FUNCTION_INVOCATION_FAILED', detail: String(err) });
   }
 }
