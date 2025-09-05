@@ -225,7 +225,7 @@ function parseQuery(text) {
   }
   
   log('🔍 Parse sonucu:', { il, ilce, urun, kategori, yil, tip });
-  return { il, ilce, urun, kategori, yil, tip };
+  return { il, ilce, urun, kategori, yil, tip, originalText: text };
 }
 
 /** ======= Ürün Eşleştirme ======= **/
@@ -246,8 +246,9 @@ function buildUrunFilter(urun, schema) {
 
 /** ======= SQL Builder ======= **/
 function buildSQL(parsed, schemaObj) {
-  const { il, ilce, urun, kategori, yil, tip } = parsed;
+  const { il, ilce, urun, kategori, yil, tip, originalText } = parsed;
   const { schema: s } = schemaObj;
+  const t = originalText.toLowerCase();
   
   // WHERE koşulları
   const wheres = [`"${s.yil}" = ${yil}`];
@@ -272,17 +273,32 @@ function buildSQL(parsed, schemaObj) {
               
     case 'ranking':
       if (il && !urun && !kategori) {
+        // "Mersin'de en çok üretilen ürünler"
         return `SELECT "${s.urun}", SUM("${s.uretim}") AS uretim 
                 FROM ${TABLE} WHERE ${whereStr} 
                 GROUP BY "${s.urun}" ORDER BY uretim DESC LIMIT 10`;
       } else if (!il && urun) {
+        // "Domates en çok hangi illerde üretiliyor"
         return `SELECT "${s.il}", SUM("${s.uretim}") AS uretim 
                 FROM ${TABLE} WHERE ${whereStr} 
                 GROUP BY "${s.il}" ORDER BY uretim DESC LIMIT 10`;
       } else if (!il && kategori) {
+        // "Sebze en çok hangi illerde üretiliyor"
         return `SELECT "${s.il}", SUM("${s.uretim}") AS uretim 
                 FROM ${TABLE} WHERE ${whereStr} 
                 GROUP BY "${s.il}" ORDER BY uretim DESC LIMIT 10`;
+      } else if (!il && !urun && !kategori) {
+        // "En çok ekim alanına sahip ürünler" - GENEL RANKING
+        const alanVar = t.includes('alan') || t.includes('ekim') || t.includes('dekar');
+        if (alanVar) {
+          return `SELECT "${s.urun}", SUM("${s.alan}") AS toplam_alan 
+                  FROM ${TABLE} WHERE ${whereStr} 
+                  GROUP BY "${s.urun}" ORDER BY toplam_alan DESC LIMIT 10`;
+        } else {
+          return `SELECT "${s.urun}", SUM("${s.uretim}") AS toplam_uretim 
+                  FROM ${TABLE} WHERE ${whereStr} 
+                  GROUP BY "${s.urun}" ORDER BY toplam_uretim DESC LIMIT 10`;
+        }
       }
       // fallthrough
       
