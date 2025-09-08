@@ -279,6 +279,11 @@ export default async function handler(req, res) {
       }
       stmt.free();
       console.log(`Sonuç: ${rows.length} satır bulundu`);
+    
+    // Eğer lahana sorgusu ise ve sonuç varsa, detayları göster
+    if (DEBUG_MODE && sql.includes('Lahana %') && rows.length > 0) {
+      console.log('Lahana sorgusu sonucu:', rows[0]);
+    }
     } catch (e) {
       console.error('SQL çalıştırma hatası:', e);
       return res.status(400).json({ 
