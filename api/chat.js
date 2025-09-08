@@ -1,4 +1,4 @@
-// api/chat.js — GPT-Only Tarım Bot
+// api/chat.js — Türkiye Tarım Veritabanı Chatbot
 export const config = { runtime: 'nodejs' };
 import fs from 'fs';
 import path from 'path';
@@ -9,47 +9,35 @@ import OpenAI from 'openai';
 const TABLE = 'urunler';
 const MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
 const DEFAULT_YEAR = 2024;
-const DEBUG_ROWS = true;
-const FORCE_GPT_ONLY = true;
+const DEBUG_MODE = true;
 
 /** ======= UTILS ======= **/
-function getSchema(db) {
-  try {
-    const cols = [];
-    const stmt = db.prepare(`PRAGMA table_info("${TABLE}");`);
-    while (stmt.step()) {
-      cols.push(stmt.getAsObject().name);
-    }
-    stmt.free();
-    
-    return {
-      columns: cols,
-      il: cols.find(c => ['il', 'İl'].includes(c)) || 'il',
-      ilce: cols.find(c => ['ilce', 'İlçe'].includes(c)) || 'ilce', 
-      urun: cols.find(c => ['urun_adi', 'urun'].includes(c)) || 'urun_adi',
-      yil: cols.find(c => ['yil', 'Yıl'].includes(c)) || 'yil',
-      uretim: cols.find(c => ['uretim_miktari', 'uretim'].includes(c)) || 'uretim_miktari',
-      alan: cols.find(c => ['uretim_alani', 'alan'].includes(c)) || 'uretim_alani',
-      verim: cols.find(c => ['verim', 'Verim'].includes(c)) || 'verim',
-      kategori: cols.find(c => ['urun_cesidi', 'kategori'].includes(c)) || 'urun_cesidi'
-    };
-  } catch (e) {
-    console.error('Schema hatası:', e);
-    return {
-      columns: ['il', 'ilce', 'urun_adi', 'yil', 'uretim_miktari', 'uretim_alani', 'verim', 'urun_cesidi'],
-      il: 'il', ilce: 'ilce', urun: 'urun_adi', yil: 'yil', 
-      uretim: 'uretim_miktari', alan: 'uretim_alani', verim: 'verim', kategori: 'urun_cesidi'
-    };
-  }
+function getSchema() {
+  // Veritabanı kolonları sabit olduğu için direkt döndürüyoruz
+  return {
+    columns: ['il', 'ilce', 'urun_cesidi', 'urun_adi', 'yil', 'uretim_alani', 'uretim_miktari', 'verim'],
+    il: 'il',
+    ilce: 'ilce',
+    kategori: 'urun_cesidi',
+    urun: 'urun_adi',
+    yil: 'yil',
+    alan: 'uretim_alani',
+    uretim: 'uretim_miktari',
+    verim: 'verim'
+  };
 }
 
 function isSafeSQL(sql) {
   const s = (sql || '').trim().toLowerCase();
   if (!s.startsWith('select')) return false;
-  if (s.includes('--') || s.includes('/*') || s.includes(';')) return false;
   
-  const dangerous = ['drop', 'delete', 'update', 'insert', 'create', 'alter'];
+  // SQL injection koruması
+  const dangerous = ['drop', 'delete', 'update', 'insert', 'create', 'alter', 'exec', 'execute'];
   return !dangerous.some(word => s.includes(word));
+}
+
+function formatNumber(num) {
+  return Number(num || 0).toLocaleString('tr-TR');
 }
 
 /** ======= GPT LAYER ======= **/
@@ -60,57 +48,65 @@ async function nlToSQL(question, schema) {
   
   const { il, ilce, urun, yil, uretim, alan, verim, kategori } = schema;
   
-  const system = `SEN BİR SQL UZMANISSIN. Türkiye tarım verileri için NL→SQL çevirici.
+  const system = `Sen bir SQL uzmanısın. Türkiye tarım verileri için doğal dil sorgularını SQL'e çevir.
 
 TABLO: ${TABLE}
-KOLONLAR: "${il}", "${ilce}", "${urun}", "${yil}", "${uretim}", "${alan}", "${verim}", "${kategori}"
-
-VERİ AÇIKLAMA:
-- "${uretim}": ton cinsinden üretim miktarı
-- "${alan}": dekar cinsinden ekim alanı  
-- "${yil}": yıl (2020-2024 arası)
-- "${verim}": ton/dekar verim
-- "${kategori}": Meyve/Sebze/Tahıl
+KOLONLAR:
+- "${il}": İl adı (TEXT)
+- "${ilce}": İlçe adı (TEXT)
+- "${kategori}": Ürün kategorisi (Meyve/Sebze/Tahıl) (TEXT)
+- "${urun}": Ürün adı (TEXT)
+- "${yil}": Yıl (INTEGER, 2020-2024 arası)
+- "${alan}": Üretim alanı, dekar cinsinden (INTEGER)
+- "${uretim}": Üretim miktarı, ton cinsinden (INTEGER)
+- "${verim}": Verim, ton/dekar (INTEGER)
 
 KRİTİK KURALLAR:
 
-1. ÜRÜN EŞLEŞME (ÇOK ÖNEMLİ):
-   - "domates" → ("${urun}" LIKE 'Domates %' OR "${urun}" LIKE '%Domates%')
-   - "biber" → ("${urun}" LIKE 'Biber %' OR "${urun}" LIKE '%Biber%') 
-   - "lahana" → ("${urun}" LIKE 'Lahana %' OR "${urun}" LIKE '%Lahana%')
-   - "üzüm" → ("${urun}" LIKE 'Üzüm %' OR "${urun}" LIKE '%Üzüm%')
-   - Genel: Ürün adının baş harfini büyük yap, hem başlangıç hem içinde ara
+1. ÜRÜN EŞLEŞME:
+   - Ürünler veritabanında şu formatlarda: "Elma Golden", "Elma Starking", "Domates Sofralık", "Biber Sivri"
+   - "elma" sorgusu → "${urun}" LIKE '%elma%' (case insensitive için LOWER kullan)
+   - "domates" → LOWER("${urun}") LIKE '%domates%'
+   - "biber" → LOWER("${urun}") LIKE '%biber%'
+   - Özel çeşit belirtilmişse: "golden elma" → "${urun}" LIKE '%Golden%'
 
-2. İL EŞLEŞME:
-   - "Mersin'de" = "Mersinde" = "Mersin ili" → "${il}"='Mersin'
+2. İL/İLÇE EŞLEŞME:
+   - "Mersin'de", "Mersinde", "Mersin ili" → "${il}"='Mersin'
    - "Adana'da" → "${il}"='Adana'
-   - "Türkiye" = "Türkiye'de" → HİÇBİR İL FİLTRESİ KOYMA
+   - İlçe: "Tarsus'ta" → "${ilce}"='Tarsus'
+   - "Türkiye geneli", "Türkiye'de" → İL FİLTRESİ KOYMA
 
 3. YIL KURALI:
-   - Yıl belirtilmemişse → HİÇBİR YIL FİLTRESİ KOYMA (otomatik 2024 eklenecek)
-   - "2022'de" → "${yil}"=2022
+   - Yıl belirtilmemişse → HİÇBİR YIL FİLTRESİ KOYMA (kod otomatik ekleyecek)
+   - "2023'te", "2023 yılında" → "${yil}"=2023
+   - "son 3 yıl" → "${yil}" IN (2022, 2023, 2024)
 
-4. TOPLAM KURALI:
-   - MUTLAKA SUM() kullan: SUM("${uretim}"), SUM("${alan}")
-   - Tek satır değeri değil, toplamları hesapla
+4. AGGREGATION KURALLARI:
+   - Üretim/alan soruları için her zaman SUM() kullan
+   - "en çok", "en fazla" → ORDER BY ... DESC
+   - "en az" → ORDER BY ... ASC
+   - "ilk 5", "top 10" → LIMIT 5, LIMIT 10
 
-ÖRNEK SQL'LER:
+ÖRNEKLER:
 
-Soru: "Mersin'de domates üretimi"
-SQL: SELECT SUM("${uretim}") AS toplam_uretim FROM ${TABLE} WHERE "${il}"='Mersin' AND ("${urun}" LIKE 'Domates %' OR "${urun}" LIKE '%Domates%')
+Soru: "Mersin'de elma üretimi"
+SQL: SELECT SUM("${uretim}") AS toplam_uretim FROM ${TABLE} WHERE "${il}"='Mersin' AND LOWER("${urun}") LIKE '%elma%'
 
-Soru: "Adana'da en çok üretilen 5 ürün"
-SQL: SELECT "${urun}", SUM("${uretim}") AS toplam FROM ${TABLE} WHERE "${il}"='Adana' GROUP BY "${urun}" ORDER BY toplam DESC LIMIT 5
+Soru: "Antalya'da en çok üretilen 5 ürün"
+SQL: SELECT "${urun}", SUM("${uretim}") AS toplam FROM ${TABLE} WHERE "${il}"='Antalya' GROUP BY "${urun}" ORDER BY toplam DESC LIMIT 5
 
-Soru: "Türkiye'de biber üretimi"
-SQL: SELECT SUM("${uretim}") AS toplam_uretim FROM ${TABLE} WHERE ("${urun}" LIKE 'Biber %' OR "${urun}" LIKE '%Biber%')
+Soru: "Türkiye'de domates üretimi"
+SQL: SELECT SUM("${uretim}") AS toplam_uretim FROM ${TABLE} WHERE LOWER("${urun}") LIKE '%domates%'
 
-Soru: "Antalya'da domates en çok hangi ilçelerde"
-SQL: SELECT "${ilce}", SUM("${uretim}") AS toplam FROM ${TABLE} WHERE "${il}"='Antalya' AND ("${urun}" LIKE 'Domates %' OR "${urun}" LIKE '%Domates%') GROUP BY "${ilce}" ORDER BY toplam DESC
+Soru: "Tarsus'ta sebze üretimi"
+SQL: SELECT SUM("${uretim}") AS toplam FROM ${TABLE} WHERE "${ilce}"='Tarsus' AND "${kategori}"='Sebze'
 
-ÇIKTI FORMAT:
-- Sadece SQL döndür, açıklama yok
-- Tek SELECT sorgusu
+Soru: "2023 yılında Adana'da meyve üretim alanı"
+SQL: SELECT SUM("${alan}") AS toplam_alan FROM ${TABLE} WHERE "${il}"='Adana' AND "${kategori}"='Meyve' AND "${yil}"=2023
+
+ÇIKTI:
+- Sadece SELECT sorgusu döndür
+- Açıklama veya yorum ekleme
 - Noktalı virgül kullanma`;
 
   try {
@@ -118,25 +114,26 @@ SQL: SELECT "${ilce}", SUM("${uretim}") AS toplam FROM ${TABLE} WHERE "${il}"='A
       model: MODEL,
       messages: [
         { role: 'system', content: system },
-        { role: 'user', content: `Soru: "${question}"\n\nYukarıdaki kurallara göre SQL oluştur.` }
+        { role: 'user', content: `Soru: "${question}"\n\nSQL sorgusu oluştur:` }
       ],
       temperature: 0,
       max_tokens: 300
     });
     
     let sql = (response.choices[0].message.content || '')
-      .replace(/```[\s\S]*?```/g, s => s.replace(/```(sql)?/g,'').replace(/```/g,''))
+      .replace(/```[\s\S]*?```/g, s => s.replace(/```(sql)?/g,'').trim())
       .trim()
       .replace(/;+\s*$/, '');
     
-    // Yıl otomatik ekleme
+    // Yıl belirtilmemişse otomatik ekle
     if (sql && !sql.includes(`"${yil}"`)) {
       if (sql.includes('WHERE')) {
-        sql = sql.replace(/WHERE/i, `WHERE "${yil}"=${DEFAULT_YEAR} AND `);
+        sql = sql.replace(/WHERE/i, `WHERE "${yil}"=${DEFAULT_YEAR} AND`);
       } else if (sql.includes('GROUP BY') || sql.includes('ORDER BY')) {
         const match = sql.match(/\b(GROUP BY|ORDER BY)/i);
-        const index = match.index;
-        sql = `${sql.slice(0, index)}WHERE "${yil}"=${DEFAULT_YEAR} ${sql.slice(index)}`;
+        if (match) {
+          sql = sql.slice(0, match.index) + `WHERE "${yil}"=${DEFAULT_YEAR} ` + sql.slice(match.index);
+        }
       } else {
         sql += ` WHERE "${yil}"=${DEFAULT_YEAR}`;
       }
@@ -144,112 +141,180 @@ SQL: SELECT "${ilce}", SUM("${uretim}") AS toplam FROM ${TABLE} WHERE "${il}"='A
     
     return sql;
   } catch (e) {
-    console.error('GPT hatası:', e);
-    throw e;
+    console.error('GPT SQL üretim hatası:', e);
+    throw new Error('SQL sorgusu oluşturulamadı');
   }
 }
 
-async function generateAnswer(question, rows) {
-  if (!rows?.length) return 'Veri bulunamadı.';
-  
-  if (!process.env.OPENAI_API_KEY) {
-    if (rows.length === 1) {
-      const entries = Object.entries(rows[0]);
-      if (entries.length === 1) {
-        const [key, value] = entries[0];
-        return `${key}: ${Number(value || 0).toLocaleString('tr-TR')} ton`;
-      }
-    }
-    return `${rows.length} sonuç bulundu.`;
+async function generateAnswer(question, rows, sql) {
+  if (!rows || rows.length === 0) {
+    return 'Bu sorguya uygun veri bulunamadı.';
   }
   
-  try {
-    const response = await openai.chat.completions.create({
-      model: MODEL,
-      messages: [{
-        role: 'system',
-        content: 'Kısa Türkçe cevap ver. Sayıları binlik ayraçla yaz. 1-2 cümle max.'
-      }, {
-        role: 'user', 
-        content: `Soru: ${question}\nVeri: ${JSON.stringify(rows.slice(0,3))}\nSatır: ${rows.length}`
-      }],
-      temperature: 0,
-      max_tokens: 100
-    });
+  // Basit tek değerli sonuçlar için
+  if (rows.length === 1) {
+    const row = rows[0];
+    const keys = Object.keys(row);
     
-    return response.choices[0].message.content?.trim() || `${rows.length} sonuç bulundu.`;
-  } catch (e) {
-    return `${rows.length} sonuç bulundu.`;
+    if (keys.length === 1) {
+      const [key, value] = Object.entries(row)[0];
+      
+      if (key.includes('uretim') || key.includes('toplam')) {
+        return `${formatNumber(value)} ton`;
+      } else if (key.includes('alan')) {
+        return `${formatNumber(value)} dekar`;
+      } else if (key.includes('verim')) {
+        return `${formatNumber(value)} ton/dekar`;
+      }
+      return formatNumber(value);
+    }
   }
+  
+  // GPT ile cevap oluştur
+  if (process.env.OPENAI_API_KEY) {
+    try {
+      const response = await openai.chat.completions.create({
+        model: MODEL,
+        messages: [{
+          role: 'system',
+          content: `Tarım verileri uzmanısın. Kısa, net Türkçe cevaplar ver. 
+                    Sayıları binlik ayraçla yaz. Birimler: üretim=ton, alan=dekar, verim=ton/dekar.
+                    Maximum 2-3 cümle kullan.`
+        }, {
+          role: 'user',
+          content: `Soru: ${question}
+                    Veri (ilk 10 satır): ${JSON.stringify(rows.slice(0, 10))}
+                    Toplam satır: ${rows.length}`
+        }],
+        temperature: 0,
+        max_tokens: 150
+      });
+      
+      return response.choices[0].message.content?.trim() || formatDefaultAnswer(rows);
+    } catch (e) {
+      console.error('GPT cevap hatası:', e);
+      return formatDefaultAnswer(rows);
+    }
+  }
+  
+  return formatDefaultAnswer(rows);
+}
+
+function formatDefaultAnswer(rows) {
+  if (rows.length === 1) {
+    return JSON.stringify(rows[0], null, 2);
+  }
+  return `${rows.length} sonuç bulundu. İlk 5 sonuç:\n${JSON.stringify(rows.slice(0, 5), null, 2)}`;
 }
 
 /** ======= MAIN HANDLER ======= **/
 export default async function handler(req, res) {
+  // CORS headers
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
   
-  if (req.method === 'OPTIONS') return res.status(200).end();
-  if (req.method !== 'POST') return res.status(405).json({ error: 'Sadece POST' });
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end();
+  }
+  
+  if (req.method !== 'POST') {
+    return res.status(405).json({ error: 'Sadece POST metodu desteklenir' });
+  }
   
   try {
     const { question } = req.body || {};
-    if (!question?.trim()) return res.status(400).json({ error: 'Soru gerekli' });
+    
+    if (!question?.trim()) {
+      return res.status(400).json({ error: 'Soru parametresi gerekli' });
+    }
     
     console.log(`[${new Date().toISOString()}] Soru: ${question}`);
     
-    // DB başlat
+    // SQLite başlat
     const SQL = await initSqlJs({
       locateFile: (file) => path.join(process.cwd(), 'node_modules/sql.js/dist', file)
     });
     
+    // Veritabanı dosyasını kontrol et
     const dbPath = path.join(process.cwd(), 'public', 'tarimdb.sqlite');
     if (!fs.existsSync(dbPath)) {
-      return res.status(500).json({ error: 'DB bulunamadı' });
+      console.error('Veritabanı bulunamadı:', dbPath);
+      return res.status(500).json({ error: 'Veritabanı dosyası bulunamadı' });
     }
     
-    const db = new SQL.Database(fs.readFileSync(dbPath));
-    const schema = getSchema(db);
+    // Veritabanını aç
+    const dbBuffer = fs.readFileSync(dbPath);
+    const db = new SQL.Database(dbBuffer);
     
-    // GPT ile SQL üret
+    // Schema bilgisini al
+    const schema = getSchema();
+    
+    // SQL oluştur
     let sql;
     try {
       sql = await nlToSQL(question, schema);
+      console.log('Oluşturulan SQL:', sql);
     } catch (e) {
-      res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-      return res.status(400).send(`GPT hatası: ${e.message}\nLütfen sorunuzu farklı formüle edin.`);
+      return res.status(400).json({ 
+        error: 'SQL sorgusu oluşturulamadı', 
+        detail: e.message 
+      });
     }
     
     // Güvenlik kontrolü
     if (!sql || !isSafeSQL(sql)) {
-      res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-      return res.status(400).send(`Güvenli olmayan SQL: ${sql}\nLütfen sorunuzu farklı formüle edin.`);
+      return res.status(400).json({ 
+        error: 'Güvenli olmayan SQL sorgusu',
+        sql: sql
+      });
     }
     
-    // SQL çalıştır
+    // SQL'i çalıştır
     let rows = [];
     try {
-      console.log('SQL:', sql);
       const stmt = db.prepare(sql);
       while (stmt.step()) {
         rows.push(stmt.getAsObject());
       }
       stmt.free();
+      console.log(`Sonuç: ${rows.length} satır bulundu`);
     } catch (e) {
-      console.error('SQL hatası:', e);
-      res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-      return res.status(400).send(`SQL hatası: ${e.message}\n\nSQL: ${sql}`);
+      console.error('SQL çalıştırma hatası:', e);
+      return res.status(400).json({ 
+        error: 'SQL sorgusu çalıştırılamadı',
+        detail: e.message,
+        sql: sql
+      });
+    } finally {
+      db.close();
     }
     
     // Cevap oluştur
-    const answer = await generateAnswer(question, rows);
-    const debug = DEBUG_ROWS ? `\n\nDEBUG:\nSQL: ${sql}\nSonuç: ${rows.length} satır` : '';
+    const answer = await generateAnswer(question, rows, sql);
     
-    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-    res.status(200).send(`${answer}\n\n${JSON.stringify(rows.slice(0,5), null, 2)}${debug}`);
+    // Debug bilgisi
+    const debugInfo = DEBUG_MODE ? {
+      sql: sql,
+      rowCount: rows.length,
+      sampleRows: rows.slice(0, 3)
+    } : null;
     
-  } catch (err) {
-    console.error('Genel hata:', err);
-    res.status(500).json({ error: 'Sunucu hatası', detail: String(err) });
+    // Yanıt gönder
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    res.status(200).json({
+      success: true,
+      answer: answer,
+      data: rows.slice(0, 10), // İlk 10 satır
+      totalRows: rows.length,
+      debug: debugInfo
+    });
+    
+  } catch (error) {
+    console.error('Genel hata:', error);
+    res.status(500).json({ 
+      error: 'Sunucu hatası', 
+      detail: error.message 
+    });
   }
 }
