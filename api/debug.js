@@ -1,98 +1,131 @@
-// api/debug.js - Sistem kontrolü için debug endpoint
+// api/db-debug.js - Veritabanı yapısını incele
 export const config = { runtime: 'nodejs' };
 import fs from 'fs';
 import path from 'path';
+import initSqlJs from 'sql.js';
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Content-Type', 'application/json');
+  res.setHeader('Content-Type', 'text/plain; charset=utf-8');
   
   if (req.method === 'OPTIONS') return res.status(200).end();
   
   try {
-    const checks = {};
-    
-    // 1. Node.js runtime kontrol
-    checks.nodejs = {
-      version: process.version,
-      platform: process.platform,
-      status: 'OK'
-    };
-    
-    // 2. Working directory kontrol
-    checks.workingDir = {
-      path: process.cwd(),
-      status: 'OK'
-    };
-    
-    // 3. Database dosyası kontrol
-    const dbPath = path.join(process.cwd(), 'public', 'tarimdb.sqlite');
-    checks.database = {
-      path: dbPath,
-      exists: fs.existsSync(dbPath),
-      status: fs.existsSync(dbPath) ? 'OK' : 'ERROR - Dosya bulunamadı'
-    };
-    
-    if (fs.existsSync(dbPath)) {
-      const stats = fs.statSync(dbPath);
-      checks.database.size = `${(stats.size / 1024 / 1024).toFixed(2)} MB`;
-      checks.database.modified = stats.mtime;
-    }
-    
-    // 4. sql.js library kontrol
-    try {
-      const sqljsPath = path.join(process.cwd(), 'node_modules/sql.js/dist/sql-wasm.wasm');
-      checks.sqljs = {
-        wasmExists: fs.existsSync(sqljsPath),
-        status: fs.existsSync(sqljsPath) ? 'OK' : 'ERROR - WASM dosyası bulunamadı'
-      };
-    } catch (e) {
-      checks.sqljs = {
-        status: 'ERROR',
-        error: e.message
-      };
-    }
-    
-    // 5. OpenAI API key kontrol
-    checks.openai = {
-      keyExists: !!process.env.OPENAI_API_KEY,
-      keyLength: process.env.OPENAI_API_KEY ? process.env.OPENAI_API_KEY.length : 0,
-      status: process.env.OPENAI_API_KEY ? 'OK' : 'WARNING - API key yok'
-    };
-    
-    // 6. Memory kullanımı
-    const memUsage = process.memoryUsage();
-    checks.memory = {
-      heapUsed: `${(memUsage.heapUsed / 1024 / 1024).toFixed(2)} MB`,
-      heapTotal: `${(memUsage.heapTotal / 1024 / 1024).toFixed(2)} MB`,
-      rss: `${(memUsage.rss / 1024 / 1024).toFixed(2)} MB`,
-      status: 'OK'
-    };
-    
-    // 7. Environment kontrol
-    checks.environment = {
-      nodeEnv: process.env.NODE_ENV || 'development',
-      platform: process.env.VERCEL ? 'Vercel' : 'Local',
-      status: 'OK'
-    };
-    
-    // Genel durum
-    const hasErrors = Object.values(checks).some(check => 
-      check.status && check.status.includes('ERROR')
-    );
-    
-    res.status(200).json({
-      success: true,
-      timestamp: new Date().toISOString(),
-      status: hasErrors ? 'ERRORS_FOUND' : 'ALL_OK',
-      checks
+    // SQL.js init
+    const SQL = await initSqlJs({
+      locateFile: (file) => {
+        if (process.env.VERCEL) {
+          return `/sql-wasm.wasm`;
+        }
+        return path.join(process.cwd(), 'node_modules/sql.js/dist', file);
+      }
     });
+    
+    // Database yükle
+    const dbPath = path.join(process.cwd(), 'public', 'tarimdb.sqlite');
+    const buffer = fs.readFileSync(dbPath);
+    const db = new SQL.Database(buffer);
+    
+    let output = "=== VERİTABANI YAPISI İNCELEMESİ ===\n\n";
+    
+    // 1. Tüm tabloları listele
+    output += "1. TABLOLAR:\n";
+    const tableStmt = db.prepare("SELECT name FROM sqlite_master WHERE type='table'");
+    while (tableStmt.step()) {
+      const table = tableStmt.getAsObject();
+      output += `- ${table.name}\n`;
+    }
+    tableStmt.free();
+    
+    // 2. Ana tablonun yapısı
+    output += "\n2. 'urunler' TABLOSU YAPISI:\n";
+    try {
+      const schemaStmt = db.prepare("PRAGMA table_info('urunler')");
+      while (schemaStmt.step()) {
+        const col = schemaStmt.getAsObject();
+        output += `- ${col.name} (${col.type})\n`;
+      }
+      schemaStmt.free();
+    } catch (e) {
+      output += `Tablo bulunamadı: ${e.message}\n`;
+    }
+    
+    // 3. Toplam satır sayısı
+    output += "\n3. TOPLAM SATIR SAYISI:\n";
+    try {
+      const countStmt = db.prepare("SELECT COUNT(*) as total FROM urunler");
+      countStmt.step();
+      const count = countStmt.getAsObject();
+      output += `Toplam: ${count.total} satır\n`;
+      countStmt.free();
+    } catch (e) {
+      output += `Sayım hatası: ${e.message}\n`;
+    }
+    
+    // 4. İlk 5 satırı göster
+    output += "\n4. İLK 5 SATIR:\n";
+    try {
+      const sampleStmt = db.prepare("SELECT * FROM urunler LIMIT 5");
+      let rowCount = 0;
+      while (sampleStmt.step()) {
+        const row = sampleStmt.getAsObject();
+        output += `Satır ${++rowCount}: ${JSON.stringify(row)}\n`;
+      }
+      sampleStmt.free();
+    } catch (e) {
+      output += `Örnek veri hatası: ${e.message}\n`;
+    }
+    
+    // 5. Benzersiz iller
+    output += "\n5. İLLER (İlk 10):\n";
+    try {
+      const ilStmt = db.prepare("SELECT DISTINCT il FROM urunler LIMIT 10");
+      while (ilStmt.step()) {
+        const il = ilStmt.getAsObject();
+        output += `- ${il.il}\n`;
+      }
+      ilStmt.free();
+    } catch (e) {
+      output += `İl listesi hatası: ${e.message}\n`;
+    }
+    
+    // 6. Benzersiz ürünler
+    output += "\n6. ÜRÜNLER (İlk 10):\n";
+    try {
+      const urunStmt = db.prepare("SELECT DISTINCT urun_adi FROM urunler LIMIT 10");
+      while (urunStmt.step()) {
+        const urun = urunStmt.getAsObject();
+        output += `- ${urun.urun_adi}\n`;
+      }
+      urunStmt.free();
+    } catch (e) {
+      output += `Ürün listesi hatası: ${e.message}\n`;
+    }
+    
+    // 7. Test sorgusu - Mersin sebze
+    output += "\n7. TEST SORGUSU - Mersin Sebze:\n";
+    try {
+      const testStmt = db.prepare(`
+        SELECT il, urun_cesidi, COUNT(*) as satir_sayisi, SUM(uretim_miktari) as toplam_uretim 
+        FROM urunler 
+        WHERE il='Mersin' AND urun_cesidi='Sebze' 
+        GROUP BY il, urun_cesidi
+      `);
+      
+      if (testStmt.step()) {
+        const result = testStmt.getAsObject();
+        output += `Sonuç: ${JSON.stringify(result)}\n`;
+      } else {
+        output += "Hiç sonuç bulunamadı!\n";
+      }
+      testStmt.free();
+    } catch (e) {
+      output += `Test sorgusu hatası: ${e.message}\n`;
+    }
+    
+    res.status(200).send(output);
     
   } catch (error) {
-    res.status(500).json({
-      success: false,
-      error: error.message,
-      stack: error.stack
-    });
+    res.status(500).send(`Hata: ${error.message}\n${error.stack}`);
   }
 }
