@@ -16,7 +16,7 @@
           "value": "*"
         },
         {
-          "key": "Access-Control-Allow-Methods",
+          "key": "Access-Control-Allow-Methods", 
           "value": "GET, POST, OPTIONS"
         },
         {
@@ -24,6 +24,12 @@
           "value": "Content-Type"
         }
       ]
+    }
+  ],
+  "rewrites": [
+    {
+      "source": "/sql-wasm.wasm",
+      "destination": "/public/sql-wasm.wasm"
     }
   ]
 }
