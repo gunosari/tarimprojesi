@@ -11,11 +11,14 @@ export default async function handler(req, res) {
   if (req.method === 'OPTIONS') return res.status(200).end();
   
   try {
-    // SQL.js init
+    // SQL.js init - daha basit yol
     const SQL = await initSqlJs({
       locateFile: (file) => {
+        // Vercel'de farklı yollar dene
         if (process.env.VERCEL) {
-          return `/sql-wasm.wasm`;
+          if (file === 'sql-wasm.wasm') {
+            return 'https://tarimprojesi.vercel.app/sql-wasm.wasm';
+          }
         }
         return path.join(process.cwd(), 'node_modules/sql.js/dist', file);
       }
