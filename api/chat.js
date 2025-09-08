@@ -1,4 +1,4 @@
-// api/chat.js — NL→SQL Tarım Bot v2
+// api/chat.js — GPT-Only Tarım Bot
 export const config = { runtime: 'nodejs' };
 import fs from 'fs';
 import path from 'path';
@@ -10,10 +10,9 @@ const TABLE = 'urunler';
 const MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
 const DEFAULT_YEAR = 2024;
 const DEBUG_ROWS = true;
+const FORCE_GPT_ONLY = true;
 
 /** ======= UTILS ======= **/
-const escapeSQL = (s = '') => String(s).replace(/'/g, "''");
-
 function getSchema(db) {
   try {
     const cols = [];
@@ -44,7 +43,7 @@ function getSchema(db) {
   }
 }
 
-function isSafeSQL(sql, allowedCols) {
+function isSafeSQL(sql) {
   const s = (sql || '').trim().toLowerCase();
   if (!s.startsWith('select')) return false;
   if (s.includes('--') || s.includes('/*') || s.includes(';')) return false;
@@ -57,7 +56,7 @@ function isSafeSQL(sql, allowedCols) {
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 async function nlToSQL(question, schema) {
-  if (!process.env.OPENAI_API_KEY) return '';
+  if (!process.env.OPENAI_API_KEY) throw new Error('OpenAI API key eksik');
   
   const { il, ilce, urun, yil, uretim, alan, verim, kategori } = schema;
   
@@ -114,16 +113,12 @@ SQL: SELECT "${ilce}", SUM("${uretim}") AS toplam FROM ${TABLE} WHERE "${il}"='A
 - Tek SELECT sorgusu
 - Noktalı virgül kullanma`;
 
-  const user = `Soru: "${question}"
-
-Yukarıdaki kurallara göre SQL oluştur.`;
-
   try {
     const response = await openai.chat.completions.create({
       model: MODEL,
       messages: [
         { role: 'system', content: system },
-        { role: 'user', content: user }
+        { role: 'user', content: `Soru: "${question}"\n\nYukarıdaki kurallara göre SQL oluştur.` }
       ],
       temperature: 0,
       max_tokens: 300
@@ -150,49 +145,10 @@ Yukarıdaki kurallara göre SQL oluştur.`;
     return sql;
   } catch (e) {
     console.error('GPT hatası:', e);
-    return '';
+    throw e;
   }
 }
 
-/** ======= KURAL TABANLI YEDEK ======= **/
-function ruleBasedSQL(question, schema) {
-  const q = question.toLowerCase();
-  const { il, ilce, urun, yil, uretim, alan } = schema;
-  
-  // İl tespit
-  let province = '';
-  const provinces = ['mersin', 'adana', 'antalya', 'ankara', 'istanbul', 'izmir'];
-  for (const p of provinces) {
-    if (q.includes(p)) {
-      province = p.charAt(0).toUpperCase() + p.slice(1);
-      break;
-    }
-  }
-  
-  // Ürün tespit
-  let product = '';
-  const products = ['domates', 'biber', 'lahana', 'hıyar', 'patlıcan', 'üzüm', 'elma'];
-  for (const p of products) {
-    if (q.includes(p)) {
-      product = p.charAt(0).toUpperCase() + p.slice(1);
-      break;
-    }
-  }
-  
-  // Basit üretim sorgusu
-  if (province && product) {
-    return `SELECT SUM("${uretim}") AS toplam_uretim FROM ${TABLE} WHERE "${il}"='${province}' AND ("${urun}" LIKE '${product} %' OR "${urun}" LIKE '%${product}%') AND "${yil}"=${DEFAULT_YEAR}`;
-  }
-  
-  // En çok üretilen ürünler
-  if (province && (q.includes('en çok') || q.includes('en fazla'))) {
-    return `SELECT "${urun}", SUM("${uretim}") AS toplam FROM ${TABLE} WHERE "${il}"='${province}' AND "${yil}"=${DEFAULT_YEAR} GROUP BY "${urun}" ORDER BY toplam DESC LIMIT 5`;
-  }
-  
-  return '';
-}
-
-/** ======= CEVAP ÜRETİMİ ======= **/
 async function generateAnswer(question, rows) {
   if (!rows?.length) return 'Veri bulunamadı.';
   
@@ -255,19 +211,19 @@ export default async function handler(req, res) {
     const db = new SQL.Database(fs.readFileSync(dbPath));
     const schema = getSchema(db);
     
-    // SQL üret
-    let sql = await nlToSQL(question, schema);
-    let method = 'gpt';
-    
-    // Güvenlik kontrolü
-    if (!sql || !isSafeSQL(sql, schema.columns)) {
-      sql = ruleBasedSQL(question, schema);
-      method = 'rules';
+    // GPT ile SQL üret
+    let sql;
+    try {
+      sql = await nlToSQL(question, schema);
+    } catch (e) {
+      res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+      return res.status(400).send(`GPT hatası: ${e.message}\nLütfen sorunuzu farklı formüle edin.`);
     }
     
-    if (!sql) {
+    // Güvenlik kontrolü
+    if (!sql || !isSafeSQL(sql)) {
       res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-      return res.status(400).send('SQL oluşturulamadı. Soruyu farklı formüle edin.');
+      return res.status(400).send(`Güvenli olmayan SQL: ${sql}\nLütfen sorunuzu farklı formüle edin.`);
     }
     
     // SQL çalıştır
@@ -287,7 +243,7 @@ export default async function handler(req, res) {
     
     // Cevap oluştur
     const answer = await generateAnswer(question, rows);
-    const debug = DEBUG_ROWS ? `\n\nDEBUG:\nMethod: ${method}\nSQL: ${sql}\nSonuç: ${rows.length} satır` : '';
+    const debug = DEBUG_ROWS ? `\n\nDEBUG:\nSQL: ${sql}\nSonuç: ${rows.length} satır` : '';
     
     res.setHeader('Content-Type', 'text/plain; charset=utf-8');
     res.status(200).send(`${answer}\n\n${JSON.stringify(rows.slice(0,5), null, 2)}${debug}`);
