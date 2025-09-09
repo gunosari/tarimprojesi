@@ -104,9 +104,6 @@ SQL: SELECT SUM("${uretim}") AS toplam FROM ${TABLE} WHERE "${ilce}"='Tarsus' AN
 Soru: "2023 yılında Adana'da meyve üretim alanı"
 SQL: SELECT SUM("${alan}") AS toplam_alan FROM ${TABLE} WHERE "${il}"='Adana' AND "${kategori}"='Meyve' AND "${yil}"=2023
 
-Soru: "Mersin Sofralık Üzüm Çekirdekli"
-SQL: SELECT SUM("${uretim}") AS toplam_uretim FROM ${TABLE} WHERE "${il}"='Mersin' AND LOWER("${urun}") LIKE '%sofralık%' AND LOWER("${urun}") LIKE '%üzüm%' AND LOWER("${urun}") LIKE '%çekirdekli%'
-
 Soru: "Mersin'de üzüm üretimi"
 SQL: SELECT SUM("${uretim}") AS toplam_uretim FROM ${TABLE} WHERE "${il}"='Mersin' AND (LOWER("${urun}") LIKE '%üzüm%' OR "${urun}" LIKE '%Üzüm%')
 
