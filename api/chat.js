@@ -186,7 +186,13 @@ async function generateAnswer(question, rows, sql) {
     if (isComparison && row.il) {
       const value = row.toplam_uretim || row.toplam || row.toplam_alan;
       if (value) {
-        return `${row.il} ilinde üretim mevcut: ${formatNumber(value)} ${key.includes('alan') ? 'dekar' : 'ton'}. Diğer il/illerde bu ürünün üretimi bulunmuyor.`;
+        // SQL'de LIMIT varsa "en fazla" mesajı ver
+        if (sql && sql.toLowerCase().includes('limit')) {
+          return `En fazla ${row.il} ilinde üretilir: ${formatNumber(value)} ton.`;
+        } else {
+          // LIMIT yoksa gerçekten sadece burada var demektir
+          return `${row.il} ilinde üretim mevcut: ${formatNumber(value)} ton. Diğer il/illerde bu ürünün üretimi bulunmuyor.`;
+        }
       }
     }
   }
@@ -227,6 +233,8 @@ async function generateAnswer(question, rows, sql) {
 }
 
 function formatDefaultAnswer(rows) {
+  console.log('formatDefaultAnswer çağrıldı, rows:', rows?.length);
+  
   if (rows.length === 1) {
     return JSON.stringify(rows[0], null, 2);
   }
@@ -256,6 +264,11 @@ export default async function handler(req, res) {
     }
     
     console.log(`[${new Date().toISOString()}] Soru: ${question}`);
+    
+    // Özel debug: "hangi ilde" pattern'i
+    if (question.toLowerCase().includes('hangi ilde')) {
+      console.log('*** HANGİ İLDE pattern algılandı ***');
+    }
     
     // SQLite başlat
     const SQL = await initSqlJs({
@@ -322,7 +335,7 @@ export default async function handler(req, res) {
     }
     
     // Cevap oluştur
-    const answer = await generateAnswer(question, rows, sql);
+    const       answer = await generateAnswerNew(question, rows, sql);
     
     // Debug bilgisi
     const debugInfo = DEBUG_MODE ? {
