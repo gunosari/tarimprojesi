@@ -9,7 +9,7 @@ import OpenAI from 'openai';
 const TABLE = 'urunler';
 const MODEL = process.env.OPENAI_MODEL || 'gpt-4o';
 const DEFAULT_YEAR = 2024;
-const DEBUG_MODE = process.env.NODE_ENV !== 'production';
+const DEBUG_MODE = false; // Production'da debug bilgiler kapalı
 
 /** ======= RATE LIMITING ======= **/
 const rateLimitMap = new Map();
