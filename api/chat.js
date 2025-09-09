@@ -186,7 +186,14 @@ async function generateAnswer(question, rows, sql) {
     if (isComparison && row.il) {
       const value = row.toplam_uretim || row.toplam || row.toplam_alan;
       if (value) {
-        return `${row.il} ilinde üretim mevcut: ${formatNumber(value)} ${key.includes('alan') ? 'dekar' : 'ton'}. Diğer il/illerde bu ürünün üretimi bulunmuyor.`;
+        // SQL'de LIMIT varsa "en fazla" mesajı ver, yoksa "sadece burada var" de
+        if (sql && sql.toLowerCase().includes('limit')) {
+          const unitText = row.toplam_alan ? 'dekar' : 'ton';
+          return `En fazla ${row.il} ilinde üretilir: ${formatNumber(value)} ${unitText}.`;
+        } else {
+          const unitText = row.toplam_alan ? 'dekar' : 'ton';
+          return `${row.il} ilinde üretim mevcut: ${formatNumber(value)} ${unitText}. Diğer il/illerde bu ürünün üretimi bulunmuyor.`;
+        }
       }
     }
   }
@@ -204,11 +211,12 @@ async function generateAnswer(question, rows, sql) {
                     
                     ÖZEL KURALLARI:
                     - Karşılaştırma sorularında (mi/mı, fazla, daha, hangi) net karşılaştırma yap
-                    - Tek sonuç varsa diğer yerlerde üretim olmadığını belirt
+                    - LIMIT olan sorgularda "en fazla/en az" ifadesi kullan
                     - "Veriye göre" gibi gereksiz ifadeler kullanma`
         }, {
           role: 'user',
           content: `Soru: ${question}
+                    SQL: ${sql}
                     Veri (ilk 10 satır): ${JSON.stringify(rows.slice(0, 10))}
                     Toplam satır: ${rows.length}`
         }],
