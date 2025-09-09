@@ -159,12 +159,13 @@ async function generateAnswer(question, rows, sql) {
     if (keys.length === 1) {
       const [key, value] = Object.entries(row)[0];
       
-      if (key.includes('uretim') || key.includes('toplam')) {
-        return `${formatNumber(value)} ton`;
-      } else if (key.includes('alan')) {
+      // Önce alan kontrolü - daha spesifik
+      if (key.includes('alan')) {
         return `${formatNumber(value)} dekar`;
       } else if (key.includes('verim')) {
         return `${formatNumber(value)} ton/dekar`;
+      } else if (key.includes('uretim') || key.includes('toplam')) {
+        return `${formatNumber(value)} ton`;
       }
       return formatNumber(value);
     }
