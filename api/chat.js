@@ -7,7 +7,7 @@ import OpenAI from 'openai';
 
 /** ======= CONFIG ======= **/
 const TABLE = 'urunler';
-const MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
+const MODEL = process.env.OPENAI_MODEL || 'gpt-4o';
 const DEFAULT_YEAR = 2024;
 const DEBUG_MODE = true;
 
