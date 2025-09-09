@@ -1,5 +1,5 @@
-// api/chat.js — Türkiye Tarım Veritabanı Chatbot
-export const config = { runtime: 'nodejs' };
+// api/chat.js — Türkiye Tarım Veritabanı Chatbot - Production Ready
+export const config = { runtime: 'nodejs', maxDuration: 30 };
 import fs from 'fs';
 import path from 'path';
 import initSqlJs from 'sql.js';
@@ -9,11 +9,74 @@ import OpenAI from 'openai';
 const TABLE = 'urunler';
 const MODEL = process.env.OPENAI_MODEL || 'gpt-4o';
 const DEFAULT_YEAR = 2024;
-const DEBUG_MODE = true;
+const DEBUG_MODE = process.env.NODE_ENV !== 'production';
+
+/** ======= RATE LIMITING ======= **/
+const rateLimitMap = new Map();
+const RATE_LIMIT_WINDOW = 60000; // 1 dakika
+const RATE_LIMIT_MAX = 15; // 15 request per dakika per IP
+
+function checkRateLimit(ip) {
+  const now = Date.now();
+  const requests = rateLimitMap.get(ip) || [];
+  const recentRequests = requests.filter(time => now - time < RATE_LIMIT_WINDOW);
+  
+  if (recentRequests.length >= RATE_LIMIT_MAX) {
+    return false;
+  }
+  
+  recentRequests.push(now);
+  rateLimitMap.set(ip, recentRequests);
+  
+  // Clean old entries periodically
+  if (Math.random() < 0.01) { // 1% chance
+    for (const [key, value] of rateLimitMap.entries()) {
+      const filtered = value.filter(time => now - time < RATE_LIMIT_WINDOW);
+      if (filtered.length === 0) {
+        rateLimitMap.delete(key);
+      } else {
+        rateLimitMap.set(key, filtered);
+      }
+    }
+  }
+  
+  return true;
+}
+
+/** ======= SIMPLE CACHE ======= **/
+const responseCache = new Map();
+const CACHE_TTL = 300000; // 5 dakika
+const MAX_CACHE_SIZE = 100;
+
+function getCachedResponse(question) {
+  const key = question.toLowerCase().trim();
+  const cached = responseCache.get(key);
+  
+  if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
+    return cached.data;
+  }
+  
+  responseCache.delete(key);
+  return null;
+}
+
+function setCachedResponse(question, data) {
+  const key = question.toLowerCase().trim();
+  
+  // Simple LRU: remove oldest if cache is full
+  if (responseCache.size >= MAX_CACHE_SIZE) {
+    const oldestKey = responseCache.keys().next().value;
+    responseCache.delete(oldestKey);
+  }
+  
+  responseCache.set(key, {
+    data: data,
+    timestamp: Date.now()
+  });
+}
 
 /** ======= UTILS ======= **/
 function getSchema() {
-  // Veritabanı kolonları sabit olduğu için direkt döndürüyoruz
   return {
     columns: ['il', 'ilce', 'urun_cesidi', 'urun_adi', 'yil', 'uretim_alani', 'uretim_miktari', 'verim'],
     il: 'il',
@@ -31,13 +94,19 @@ function isSafeSQL(sql) {
   const s = (sql || '').trim().toLowerCase();
   if (!s.startsWith('select')) return false;
   
-  // SQL injection koruması
-  const dangerous = ['drop', 'delete', 'update', 'insert', 'create', 'alter', 'exec', 'execute'];
+  const dangerous = ['drop', 'delete', 'update', 'insert', 'create', 'alter', 'exec', 'execute', '--', ';'];
   return !dangerous.some(word => s.includes(word));
 }
 
 function formatNumber(num) {
   return Number(num || 0).toLocaleString('tr-TR');
+}
+
+function getClientIP(req) {
+  return req.headers['x-forwarded-for'] || 
+         req.headers['x-real-ip'] || 
+         req.connection?.remoteAddress || 
+         'unknown';
 }
 
 /** ======= GPT LAYER ======= **/
@@ -64,66 +133,38 @@ KOLONLAR:
 KRİTİK KURALLAR:
 
 1. ÜRÜN EŞLEŞME:
-   - Ürünler veritabanında şu formatlarda: "Elma Golden", "Elma Starking", "Domates Sofralık", "Biber Sivri"
-   - "elma" sorgusu → "${urun}" LIKE '%elma%' (case insensitive için LOWER kullan)
-   - "domates" → LOWER("${urun}") LIKE '%domates%'
-   - "biber" → LOWER("${urun}") LIKE '%biber%'
-   - Özel çeşit belirtilmişse: "golden elma" → "${urun}" LIKE '%Golden%'
+   - Ürünler: "Sofralık Üzüm, Çekirdekli", "Elma Golden", "Domates Sofralık"
+   - Tekli: "üzüm" → LOWER("${urun}") LIKE '%üzüm%' OR "${urun}" LIKE '%Üzüm%'
+   - Çoklu: "sofralık üzüm çekirdekli" → Her kelimeyi ayrı kontrol:
+     LOWER("${urun}") LIKE '%sofralık%' AND LOWER("${urun}") LIKE '%üzüm%' AND LOWER("${urun}") LIKE '%çekirdekli%'
 
 2. İL/İLÇE EŞLEŞME:
-   - "Mersin'de", "Mersinde", "Mersin ili" → "${il}"='Mersin'
-   - "Adana'da" → "${il}"='Adana'
-   - İlçe: "Tarsus'ta" → "${ilce}"='Tarsus'
-   - "Türkiye geneli", "Türkiye'de" → İL FİLTRESİ KOYMA
+   - "Mersin'de" → "${il}"='Mersin'
+   - "Tarsus'ta" → "${ilce}"='Tarsus'  
+   - "Türkiye'de" → İl filtresi koyma
 
 3. YIL KURALI:
-   - Yıl belirtilmemişse → HİÇBİR YIL FİLTRESİ KOYMA (kod otomatik ekleyecek)
-   - "2023'te", "2023 yılında" → "${yil}"=2023
-   - "son 3 yıl" → "${yil}" IN (2022, 2023, 2024)
+   - Yıl yok → Otomatik ${DEFAULT_YEAR} eklenecek
+   - "2023'te" → "${yil}"=2023
 
-4. AGGREGATION KURALLARI:
-   - Üretim/alan soruları için her zaman SUM() kullan
-   - "en çok", "en fazla" → ORDER BY ... DESC
-   - "en az" → ORDER BY ... ASC
-   - "ilk 5", "top 10" → LIMIT 5, LIMIT 10
+4. AGGREGATION:
+   - SUM() kullan, "en çok" → ORDER BY DESC
 
 ÖRNEKLER:
+Soru: "Mersin sofralık üzüm çekirdekli"
+SQL: SELECT SUM("${uretim}") AS toplam_uretim FROM ${TABLE} WHERE "${il}"='Mersin' AND LOWER("${urun}") LIKE '%sofralık%' AND LOWER("${urun}") LIKE '%üzüm%' AND LOWER("${urun}") LIKE '%çekirdekli%'
 
-Soru: "Mersin'de elma üretimi"
-SQL: SELECT SUM("${uretim}") AS toplam_uretim FROM ${TABLE} WHERE "${il}"='Mersin' AND LOWER("${urun}") LIKE '%elma%'
-
-Soru: "Antalya'da en çok üretilen 5 ürün"
-SQL: SELECT "${urun}", SUM("${uretim}") AS toplam FROM ${TABLE} WHERE "${il}"='Antalya' GROUP BY "${urun}" ORDER BY toplam DESC LIMIT 5
-
-Soru: "Türkiye'de domates üretimi"
-SQL: SELECT SUM("${uretim}") AS toplam_uretim FROM ${TABLE} WHERE LOWER("${urun}") LIKE '%domates%'
-
-Soru: "Tarsus'ta sebze üretimi"
-SQL: SELECT SUM("${uretim}") AS toplam FROM ${TABLE} WHERE "${ilce}"='Tarsus' AND "${kategori}"='Sebze'
-
-Soru: "2023 yılında Adana'da meyve üretim alanı"
-SQL: SELECT SUM("${alan}") AS toplam_alan FROM ${TABLE} WHERE "${il}"='Adana' AND "${kategori}"='Meyve' AND "${yil}"=2023
-
-Soru: "Mersin'de üzüm üretimi"
-SQL: SELECT SUM("${uretim}") AS toplam_uretim FROM ${TABLE} WHERE "${il}"='Mersin' AND (LOWER("${urun}") LIKE '%üzüm%' OR "${urun}" LIKE '%Üzüm%')
-
-Soru: "Mersinde mi Adana da mı biber üretimi fazla"
-SQL: SELECT "${il}", SUM("${uretim}") AS toplam_uretim FROM ${TABLE} WHERE ("${il}"='Mersin' OR "${il}"='Adana') AND LOWER("${urun}") LIKE '%biber%' GROUP BY "${il}" ORDER BY toplam_uretim DESC
-
-ÇIKTI:
-- Sadece SELECT sorgusu döndür
-- Açıklama veya yorum ekleme
-- Noktalı virgül kullanma`;
+ÇIKTI: Sadece SELECT sorgusu, noktalama yok.`;
 
   try {
     const response = await openai.chat.completions.create({
       model: MODEL,
       messages: [
         { role: 'system', content: system },
-        { role: 'user', content: `Soru: "${question}"\n\nSQL sorgusu oluştur:` }
+        { role: 'user', content: `Soru: "${question}"\n\nSQL:` }
       ],
       temperature: 0,
-      max_tokens: 300
+      max_tokens: 200
     });
     
     let sql = (response.choices[0].message.content || '')
@@ -131,7 +172,7 @@ SQL: SELECT "${il}", SUM("${uretim}") AS toplam_uretim FROM ${TABLE} WHERE ("${i
       .trim()
       .replace(/;+\s*$/, '');
     
-    // Yıl belirtilmemişse otomatik ekle
+    // Yıl otomatik ekleme
     if (sql && !sql.includes(`"${yil}"`)) {
       if (sql.includes('WHERE')) {
         sql = sql.replace(/WHERE/i, `WHERE "${yil}"=${DEFAULT_YEAR} AND`);
@@ -147,8 +188,8 @@ SQL: SELECT "${il}", SUM("${uretim}") AS toplam_uretim FROM ${TABLE} WHERE ("${i
     
     return sql;
   } catch (e) {
-    console.error('GPT SQL üretim hatası:', e);
-    throw new Error('SQL sorgusu oluşturulamadı');
+    console.error('OpenAI hatası:', e.message);
+    throw new Error(`GPT servisi geçici olarak kullanılamıyor: ${e.message}`);
   }
 }
 
@@ -157,16 +198,7 @@ async function generateAnswer(question, rows, sql) {
     return 'Bu sorguya uygun veri bulunamadı.';
   }
   
-  // Karşılaştırma soruları için özel mantık
-  const isComparison = question.toLowerCase().includes(' mi ') || 
-                       question.toLowerCase().includes(' mı ') ||
-                       question.toLowerCase().includes(' mu ') ||
-                       question.toLowerCase().includes(' mü ') ||
-                       question.toLowerCase().includes('fazla') ||
-                       question.toLowerCase().includes('daha') ||
-                       question.toLowerCase().includes('hangi');
-  
-  // Basit tek değerli sonuçlar için
+  // Basit cevaplar için hızlı return
   if (rows.length === 1) {
     const row = rows[0];
     const keys = Object.keys(row);
@@ -174,12 +206,10 @@ async function generateAnswer(question, rows, sql) {
     if (keys.length === 1) {
       const [key, value] = Object.entries(row)[0];
       
-      // Null/undefined kontrolü
       if (value === null || value === undefined || value === 0) {
         return 'Bu sorguya uygun veri bulunamadı.';
       }
       
-      // Önce alan kontrolü - daha spesifik
       if (key.includes('alan')) {
         return `${formatNumber(value)} dekar`;
       } else if (key.includes('verim')) {
@@ -189,69 +219,40 @@ async function generateAnswer(question, rows, sql) {
       }
       return formatNumber(value);
     }
-    
-    // Karşılaştırma sorularında tek sonuç varsa özel mesaj
-    if (isComparison && row.il) {
-      const value = row.toplam_uretim || row.toplam || row.toplam_alan;
-      if (value) {
-        // SQL'de LIMIT varsa "en fazla" mesajı ver, yoksa "sadece burada var" de
-        if (sql && sql.toLowerCase().includes('limit')) {
-          const unitText = row.toplam_alan ? 'dekar' : 'ton';
-          return `En fazla ${row.il} ilinde üretilir: ${formatNumber(value)} ${unitText}.`;
-        } else {
-          const unitText = row.toplam_alan ? 'dekar' : 'ton';
-          return `${row.il} ilinde üretim mevcut: ${formatNumber(value)} ${unitText}. Diğer il/illerde bu ürünün üretimi bulunmuyor.`;
-        }
-      }
-    }
   }
   
-  // GPT ile cevap oluştur
+  // Karmaşık cevaplar için GPT kullan
   if (process.env.OPENAI_API_KEY) {
     try {
       const response = await openai.chat.completions.create({
         model: MODEL,
         messages: [{
           role: 'system',
-          content: `Tarım verileri uzmanısın. Kısa, net Türkçe cevaplar ver. 
-                    Sayıları binlik ayraçla yaz. Birimler: üretim=ton, alan=dekar, verim=ton/dekar.
-                    Maximum 2-3 cümle kullan.
-                    
-                    ÖZEL KURALLARI:
-                    - Karşılaştırma sorularında (mi/mı, fazla, daha, hangi) net karşılaştırma yap
-                    - LIMIT olan sorgularda "en fazla/en az" ifadesi kullan
-                    - "Veriye göre" gibi gereksiz ifadeler kullanma`
+          content: 'Tarım verileri uzmanısın. Kısa Türkçe cevap ver. Sayıları binlik ayraçla yaz.'
         }, {
           role: 'user',
-          content: `Soru: ${question}
-                    SQL: ${sql}
-                    Veri (ilk 10 satır): ${JSON.stringify(rows.slice(0, 10))}
-                    Toplam satır: ${rows.length}`
+          content: `Soru: ${question}\nVeri: ${JSON.stringify(rows.slice(0, 5))}`
         }],
         temperature: 0,
-        max_tokens: 150
+        max_tokens: 100
       });
       
-      return response.choices[0].message.content?.trim() || formatDefaultAnswer(rows);
+      return response.choices[0].message.content?.trim() || 'Cevap oluşturulamadı.';
     } catch (e) {
       console.error('GPT cevap hatası:', e);
-      return formatDefaultAnswer(rows);
+      return `${rows.length} sonuç bulundu: ${JSON.stringify(rows[0])}`;
     }
   }
   
-  return formatDefaultAnswer(rows);
-}
-
-function formatDefaultAnswer(rows) {
-  if (rows.length === 1) {
-    return JSON.stringify(rows[0], null, 2);
-  }
-  return `${rows.length} sonuç bulundu. İlk 5 sonuç:\n${JSON.stringify(rows.slice(0, 5), null, 2)}`;
+  return `${rows.length} sonuç bulundu.`;
 }
 
 /** ======= MAIN HANDLER ======= **/
 export default async function handler(req, res) {
-  // CORS headers
+  const startTime = Date.now();
+  const clientIP = getClientIP(req);
+  
+  // CORS
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
@@ -264,6 +265,14 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: 'Sadece POST metodu desteklenir' });
   }
   
+  // Rate limiting
+  if (!checkRateLimit(clientIP)) {
+    return res.status(429).json({ 
+      error: 'Çok fazla istek', 
+      detail: 'Dakikada maksimum 15 soru sorabilirsiniz. Lütfen bekleyin.'
+    });
+  }
+  
   try {
     const { question } = req.body || {};
     
@@ -271,48 +280,50 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: 'Soru parametresi gerekli' });
     }
     
-    console.log(`[${new Date().toISOString()}] Soru: ${question}`);
+    // Cache kontrolü
+    const cached = getCachedResponse(question);
+    if (cached) {
+      console.log(`[CACHE HIT] ${question}`);
+      return res.status(200).json({
+        ...cached,
+        cached: true,
+        processingTime: Date.now() - startTime
+      });
+    }
     
-    // SQLite başlat
+    console.log(`[${new Date().toISOString()}] IP: ${clientIP}, Soru: ${question}`);
+    
+    // SQLite initialize
     const SQL = await initSqlJs({
       locateFile: (file) => path.join(process.cwd(), 'node_modules/sql.js/dist', file)
     });
     
-    // Veritabanı dosyasını kontrol et
     const dbPath = path.join(process.cwd(), 'public', 'tarimdb.sqlite');
     if (!fs.existsSync(dbPath)) {
-      console.error('Veritabanı bulunamadı:', dbPath);
-      return res.status(500).json({ error: 'Veritabanı dosyası bulunamadı' });
+      throw new Error('Veritabanı dosyası bulunamadı');
     }
     
-    // Veritabanını aç
     const dbBuffer = fs.readFileSync(dbPath);
     const db = new SQL.Database(dbBuffer);
-    
-    // Schema bilgisini al
-    const schema = getSchema();
     
     // SQL oluştur
     let sql;
     try {
-      sql = await nlToSQL(question, schema);
-      console.log('Oluşturulan SQL:', sql);
+      sql = await nlToSQL(question, getSchema());
+      if (DEBUG_MODE) console.log('SQL:', sql);
     } catch (e) {
       return res.status(400).json({ 
-        error: 'SQL sorgusu oluşturulamadı', 
+        error: 'Soru anlayılamadı', 
         detail: e.message 
       });
     }
     
-    // Güvenlik kontrolü
-    if (!sql || !isSafeSQL(sql)) {
-      return res.status(400).json({ 
-        error: 'Güvenli olmayan SQL sorgusu',
-        sql: sql
-      });
+    // Güvenlik
+    if (!isSafeSQL(sql)) {
+      return res.status(400).json({ error: 'Güvenli olmayan sorgu' });
     }
     
-    // SQL'i çalıştır
+    // SQL çalıştır
     let rows = [];
     try {
       const stmt = db.prepare(sql);
@@ -320,18 +331,12 @@ export default async function handler(req, res) {
         rows.push(stmt.getAsObject());
       }
       stmt.free();
-      console.log(`Sonuç: ${rows.length} satır bulundu`);
-    
-    // Eğer lahana sorgusu ise ve sonuç varsa, detayları göster
-    if (DEBUG_MODE && sql.includes('Lahana %') && rows.length > 0) {
-      console.log('Lahana sorgusu sonucu:', rows[0]);
-    }
+      console.log(`Sonuç: ${rows.length} satır`);
     } catch (e) {
-      console.error('SQL çalıştırma hatası:', e);
+      console.error('SQL hatası:', e);
       return res.status(400).json({ 
-        error: 'SQL sorgusu çalıştırılamadı',
-        detail: e.message,
-        sql: sql
+        error: 'Sorgu çalıştırılamadı',
+        detail: 'Veritabanı sorgu hatası'
       });
     } finally {
       db.close();
@@ -340,28 +345,26 @@ export default async function handler(req, res) {
     // Cevap oluştur
     const answer = await generateAnswer(question, rows, sql);
     
-    // Debug bilgisi
-    const debugInfo = DEBUG_MODE ? {
-      sql: sql,
-      rowCount: rows.length,
-      sampleRows: rows.slice(0, 3)
-    } : null;
-    
-    // Yanıt gönder
-    res.setHeader('Content-Type', 'application/json; charset=utf-8');
-    res.status(200).json({
+    const response = {
       success: true,
       answer: answer,
-      data: rows.slice(0, 10), // İlk 10 satır
+      data: rows.slice(0, 10),
       totalRows: rows.length,
-      debug: debugInfo
-    });
+      processingTime: Date.now() - startTime,
+      debug: DEBUG_MODE ? { sql, sampleRows: rows.slice(0, 2) } : null
+    };
+    
+    // Cache'e kaydet
+    setCachedResponse(question, response);
+    
+    res.status(200).json(response);
     
   } catch (error) {
-    console.error('Genel hata:', error);
+    console.error('Genel hata:', error.message);
     res.status(500).json({ 
       error: 'Sunucu hatası', 
-      detail: error.message 
+      detail: DEBUG_MODE ? error.message : 'Geçici bir sorun oluştu',
+      processingTime: Date.now() - startTime
     });
   }
 }
