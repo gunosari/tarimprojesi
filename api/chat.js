@@ -130,15 +130,21 @@ KOLONLAR:
 - "${uretim}": Üretim miktarı, ton cinsinden (INTEGER)
 - "${verim}": Verim, ton/dekar (INTEGER)
 
+ÖNEMLİ: YAZIM HATALARINI OTOMATIK DÜZELT!
+- "kaysı" → "kayısı", "anakara" → "ankara", "domates" → "domates"
+- "adanna" → "adana", "mersinn" → "mersin", "izmirr" → "izmir"
+- İl/ürün isimlerindeki typo'ları düzelt
+
 KRİTİK KURALLAR:
 
 1. ÜRÜN EŞLEŞME:
-   - Ürünler: "Sofralık Üzüm, Çekirdekli", "Elma Golden", "Domates Sofralık"
+   - Yazım hatalarını düzelt: "kaysı" → "kayısı" olarak işle
    - Tekli: "üzüm" → LOWER("${urun}") LIKE '%üzüm%' OR "${urun}" LIKE '%Üzüm%'
    - Çoklu: "sofralık üzüm çekirdekli" → Her kelimeyi ayrı kontrol:
      LOWER("${urun}") LIKE '%sofralık%' AND LOWER("${urun}") LIKE '%üzüm%' AND LOWER("${urun}") LIKE '%çekirdekli%'
 
 2. İL/İLÇE EŞLEŞME:
+   - Yazım hatalarını düzelt: "anakara" → "ankara" olarak işle
    - "Mersin'de" → "${il}"='Mersin'
    - "Tarsus'ta" → "${ilce}"='Tarsus'  
    - "Türkiye'de" → İl filtresi koyma
@@ -151,8 +157,9 @@ KRİTİK KURALLAR:
    - SUM() kullan, "en çok" → ORDER BY DESC
 
 ÖRNEKLER:
-Soru: "Mersin sofralık üzüm çekirdekli"
-SQL: SELECT SUM("${uretim}") AS toplam_uretim FROM ${TABLE} WHERE "${il}"='Mersin' AND LOWER("${urun}") LIKE '%sofralık%' AND LOWER("${urun}") LIKE '%üzüm%' AND LOWER("${urun}") LIKE '%çekirdekli%'
+Soru: "mersinn kaysı üretimi" (yazım hatalı)
+İşle: "mersin kayısı üretimi" (düzeltilmiş)
+SQL: SELECT SUM("${uretim}") AS toplam_uretim FROM ${TABLE} WHERE "${il}"='Mersin' AND LOWER("${urun}") LIKE '%kayısı%'
 
 ÇIKTI: Sadece SELECT sorgusu, noktalama yok.`;
 
