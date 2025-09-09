@@ -161,6 +161,12 @@ Soru: "mersinn kaysı üretimi" (yazım hatalı)
 İşle: "mersin kayısı üretimi" (düzeltilmiş)
 SQL: SELECT SUM("${uretim}") AS toplam_uretim FROM ${TABLE} WHERE "${il}"='Mersin' AND LOWER("${urun}") LIKE '%kayısı%'
 
+Soru: "elma üretimi"  
+SQL: SELECT SUM("${uretim}") AS toplam_uretim FROM ${TABLE} WHERE (LOWER("${urun}") LIKE '%elma%' OR "${urun}" LIKE '%Elma%') AND LOWER("${urun}") NOT LIKE '%trabzon hurması%' AND LOWER("${urun}") NOT LIKE '%cennet elması%' AND LOWER("${urun}") NOT LIKE '%yer elması%'
+
+Soru: "Ankara elma üretimi"
+SQL: SELECT SUM("${uretim}") AS toplam_uretim FROM ${TABLE} WHERE "${il}"='Ankara' AND (LOWER("${urun}") LIKE '%elma%' OR "${urun}" LIKE '%Elma%') AND LOWER("${urun}") NOT LIKE '%trabzon hurması%' AND LOWER("${urun}") NOT LIKE '%cennet elması%' AND LOWER("${urun}") NOT LIKE '%yer elması%'
+
 ÇIKTI: Sadece SELECT sorgusu, noktalama yok.`;
 
   try {
