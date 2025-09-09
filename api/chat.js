@@ -227,6 +227,8 @@ async function generateAnswer(question, rows, sql) {
 }
 
 function formatDefaultAnswer(rows) {
+  console.log('formatDefaultAnswer çağrıldı, rows:', rows?.length);
+  
   if (rows.length === 1) {
     return JSON.stringify(rows[0], null, 2);
   }
