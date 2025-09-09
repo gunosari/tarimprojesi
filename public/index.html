@@ -3,44 +3,168 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Tarım Chatbot</title>
+    <title>Tarım Verileri Asistanı</title>
     <style>
-      body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; max-width: 820px; margin: 32px auto; padding: 0 16px; line-height: 1.5; }
-      h1 { margin-bottom: 8px; }
-      .row { display: flex; gap: 8px; margin: 12px 0 8px; }
-      input[type="text"] { flex: 1; padding: 10px 12px; font-size: 16px; border: 1px solid #ccc; border-radius: 8px; }
-      button { padding: 10px 14px; font-size: 15px; border: 0; border-radius: 8px; background: #0B3D91; color: white; cursor: pointer; }
-      button[disabled] { opacity: .6; cursor: not-allowed; }
-      .samples { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0 16px; }
-      .chip { border: 1px solid #ddd; border-radius: 999px; padding: 6px 10px; cursor: pointer; font-size: 14px; background: #f7f7f7; }
-      .muted { color: #666; font-size: 14px; }
-      pre { white-space: pre-wrap; word-break: break-word; background: #fafafa; border: 1px solid #eee; border-radius: 8px; padding: 12px; min-height: 120px; }
+      body { 
+        font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; 
+        max-width: 820px; 
+        margin: 32px auto; 
+        padding: 0 16px; 
+        line-height: 1.5; 
+        background: #fafafa;
+      }
+      .container {
+        background: white;
+        border-radius: 12px;
+        padding: 24px;
+        box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+      }
+      h1 { 
+        margin-bottom: 8px; 
+        color: #1f2937;
+        font-size: 24px;
+      }
+      .row { 
+        display: flex; 
+        gap: 8px; 
+        margin: 16px 0;
+      }
+      input[type="text"] { 
+        flex: 1; 
+        padding: 12px 16px; 
+        font-size: 16px; 
+        border: 2px solid #e5e7eb; 
+        border-radius: 8px; 
+        transition: border-color 0.2s;
+      }
+      input[type="text"]:focus {
+        outline: none;
+        border-color: #0B3D91;
+      }
+      button { 
+        padding: 12px 20px; 
+        font-size: 15px; 
+        border: 0; 
+        border-radius: 8px; 
+        background: #0B3D91; 
+        color: white; 
+        cursor: pointer; 
+        font-weight: 500;
+        transition: background 0.2s;
+      }
+      button:hover:not([disabled]) {
+        background: #0a2d6b;
+      }
+      button[disabled] { 
+        opacity: .6; 
+        cursor: not-allowed; 
+      }
+      .samples { 
+        display: flex; 
+        flex-wrap: wrap; 
+        gap: 8px; 
+        margin: 16px 0 20px; 
+      }
+      .chip { 
+        border: 1px solid #d1d5db; 
+        border-radius: 999px; 
+        padding: 8px 12px; 
+        cursor: pointer; 
+        font-size: 14px; 
+        background: #f9fafb; 
+        transition: all 0.2s;
+        color: #374151;
+      }
+      .chip:hover {
+        background: #f3f4f6;
+        border-color: #9ca3af;
+      }
+      .muted { 
+        color: #6b7280; 
+        font-size: 14px; 
+        margin-bottom: 20px;
+      }
+      .response-area {
+        margin-top: 20px;
+        padding-top: 20px;
+        border-top: 1px solid #e5e7eb;
+      }
+      .answer-box { 
+        background: #f0fdf4; 
+        border: 1px solid #bbf7d0;
+        border-left: 4px solid #10b981;
+        border-radius: 8px; 
+        padding: 16px; 
+        min-height: 60px;
+        font-size: 16px;
+        color: #065f46;
+        line-height: 1.6;
+      }
+      .error-box {
+        background: #fef2f2;
+        border: 1px solid #fecaca;
+        border-left: 4px solid #ef4444;
+        border-radius: 8px;
+        padding: 16px;
+        color: #dc2626;
+      }
+      .loading {
+        color: #6b7280;
+        font-style: italic;
+        padding: 16px;
+        text-align: center;
+      }
+      .meta-info {
+        font-size: 12px;
+        color: #9ca3af;
+        margin-top: 8px;
+        text-align: right;
+      }
+      @media (max-width: 640px) {
+        .container {
+          margin: 16px;
+          padding: 20px 16px;
+        }
+        .row {
+          flex-direction: column;
+        }
+        input[type="text"] {
+          margin-bottom: 8px;
+        }
+      }
     </style>
   </head>
   <body>
-    <h1>Tarım Chatbot Çalışıyor</h1>
-    <p class="muted">Aşağıya doğal dille yaz, ben SQL’e çevirip veritabanından getirip cevaplayayım.</p>
+    <div class="container">
+      <h1>🌾 Tarım Verileri Asistanı</h1>
+      <p class="muted">Türkiye tarım üretim verilerini doğal dille sorgulayın. Örnek: "Mersin'de kaç ton sebze üretilmiş?"</p>
+      
+      <div class="row">
+        <input id="q" type="text" placeholder='Örnek: "Antalya'da domates üretimi ne kadar?"' maxlength="200" />
+        <button id="send">Sorgula</button>
+      </div>
+      
+      <div class="samples">
+        <span class="chip">Mersin'de kaç ton sebze üretilmiş?</span>
+        <span class="chip">Adana'da en çok üretilen 5 ürün</span>
+        <span class="chip">Antalya'da domates en çok hangi ilçelerde üretiliyor?</span>
+        <span class="chip">İzmir'de toplam ekim alanı</span>
+        <span class="chip">2023 yılında elma üretimi</span>
+      </div>
 
-    <div class="row">
-      <input id="q" type="text" placeholder='ör. "Mersin’de kaç ton sebze üretilmiş?"' />
-      <button id="send">Gönder</button>
+      <div id="responseArea" class="response-area" style="display: none;">
+        <div id="output" class="answer-box"></div>
+        <div id="metaInfo" class="meta-info"></div>
+      </div>
     </div>
-
-    <div class="samples">
-      <span class="chip">Mersin’de kaç ton sebze üretilmiş?</span>
-      <span class="chip">Adana’da en çok üretilen 5 ürün</span>
-      <span class="chip">Antalya’da domates en çok hangi ilçelerde üretiliyor?</span>
-      <span class="chip">İzmir’de toplam ekim alanı (dekar)</span>
-      <span class="chip">Mersin 2022 biber üretimi</span>
-    </div>
-
-    <pre id="out"></pre>
 
     <script>
       const $ = (s) => document.querySelector(s);
       const q = $('#q');
       const btn = $('#send');
-      const out = $('#out');
+      const output = $('#output');
+      const responseArea = $('#responseArea');
+      const metaInfo = $('#metaInfo');
 
       // Örnek chip'lere tıklayınca inputa yaz
       document.querySelectorAll('.chip').forEach(chip => {
@@ -52,42 +176,83 @@
 
       // Enter ile gönder
       q.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') send();
+        if (e.key === 'Enter' && !btn.disabled) {
+          send();
+        }
       });
 
       btn.addEventListener('click', send);
+      q.focus(); // Otofocus
 
       async function send() {
         const question = q.value.trim();
         if (!question) {
-          out.textContent = 'Bir soru yazmalısın.';
+          showError('Lütfen bir soru girin.');
           q.focus();
           return;
         }
 
+        // UI güncellemeleri
         btn.disabled = true;
         const oldLabel = btn.textContent;
-        btn.textContent = 'Yükleniyor…';
-        out.textContent = '';
+        btn.textContent = 'Sorgulanıyor...';
+        
+        responseArea.style.display = 'block';
+        output.className = 'loading';
+        output.textContent = 'Veriler sorgulanıyor, lütfen bekleyin...';
+        metaInfo.textContent = '';
+
+        const startTime = Date.now();
 
         try {
-          const r = await fetch('/api/chat', {
+          const response = await fetch('/api/chat', {
             method: 'POST',
-            headers: { 'content-type': 'application/json' },
+            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ question })
           });
 
-          // Text veya JSON gelebilir; varsayılanı text kabul ediyoruz
-          const ct = r.headers.get('content-type') || '';
-          const payload = ct.includes('application/json') ? JSON.stringify(await r.json(), null, 2)
-                                                          : await r.text();
-          out.textContent = payload;
-        } catch (err) {
-          out.textContent = 'İstek başarısız oldu: ' + (err?.message || String(err));
+          const data = await response.json();
+          const processingTime = Date.now() - startTime;
+
+          if (!response.ok) {
+            throw new Error(data.detail || data.error || 'Bir hata oluştu');
+          }
+
+          // Başarılı yanıt
+          showAnswer(data.answer, data.processingTime || processingTime, data.cached);
+
+        } catch (error) {
+          console.error('Hata:', error);
+          
+          if (error.message.includes('429') || error.message.includes('fazla istek')) {
+            showError('Çok fazla istek gönderildi. Lütfen bir dakika bekleyip tekrar deneyin.');
+          } else if (error.message.includes('network') || error.message.includes('Failed to fetch')) {
+            showError('Bağlantı hatası. İnternet bağlantınızı kontrol edin.');
+          } else {
+            showError(error.message || 'Beklenmeyen bir hata oluştu.');
+          }
         } finally {
           btn.disabled = false;
           btn.textContent = oldLabel;
         }
+      }
+
+      function showAnswer(answer, processingTime, cached) {
+        output.className = 'answer-box';
+        output.textContent = answer;
+        
+        let timeText = `İşlem süresi: ${processingTime}ms`;
+        if (cached) timeText += ' (önbellekten)';
+        metaInfo.textContent = timeText;
+        
+        // Cevaba scroll
+        output.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      }
+
+      function showError(message) {
+        output.className = 'error-box';
+        output.textContent = message;
+        metaInfo.textContent = '';
       }
     </script>
   </body>
