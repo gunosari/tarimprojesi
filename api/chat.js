@@ -329,7 +329,7 @@ export default async function handler(req, res) {
     }
     
     // Cevap oluştur
-    const answer = await generateAnswer(question, rows, sql);
+    const       answer = await generateAnswerNew(question, rows, sql);
     
     // Debug bilgisi
     const debugInfo = DEBUG_MODE ? {
