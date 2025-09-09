@@ -259,6 +259,11 @@ export default async function handler(req, res) {
     
     console.log(`[${new Date().toISOString()}] Soru: ${question}`);
     
+    // Özel debug: "hangi ilde" pattern'i
+    if (question.toLowerCase().includes('hangi ilde')) {
+      console.log('*** HANGİ İLDE pattern algılandı ***');
+    }
+    
     // SQLite başlat
     const SQL = await initSqlJs({
       locateFile: (file) => path.join(process.cwd(), 'node_modules/sql.js/dist', file)
