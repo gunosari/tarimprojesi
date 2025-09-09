@@ -104,6 +104,9 @@ SQL: SELECT SUM("${uretim}") AS toplam FROM ${TABLE} WHERE "${ilce}"='Tarsus' AN
 Soru: "2023 yılında Adana'da meyve üretim alanı"
 SQL: SELECT SUM("${alan}") AS toplam_alan FROM ${TABLE} WHERE "${il}"='Adana' AND "${kategori}"='Meyve' AND "${yil}"=2023
 
+Soru: "Mersinde mi Adana da mı biber üretimi fazla"
+SQL: SELECT "${il}", SUM("${uretim}") AS toplam_uretim FROM ${TABLE} WHERE ("${il}"='Mersin' OR "${il}"='Adana') AND LOWER("${urun}") LIKE '%biber%' GROUP BY "${il}" ORDER BY toplam_uretim DESC
+
 ÇIKTI:
 - Sadece SELECT sorgusu döndür
 - Açıklama veya yorum ekleme
@@ -151,6 +154,15 @@ async function generateAnswer(question, rows, sql) {
     return 'Bu sorguya uygun veri bulunamadı.';
   }
   
+  // Karşılaştırma soruları için özel mantık
+  const isComparison = question.toLowerCase().includes(' mi ') || 
+                       question.toLowerCase().includes(' mı ') ||
+                       question.toLowerCase().includes(' mu ') ||
+                       question.toLowerCase().includes(' mü ') ||
+                       question.toLowerCase().includes('fazla') ||
+                       question.toLowerCase().includes('daha') ||
+                       question.toLowerCase().includes('hangi');
+  
   // Basit tek değerli sonuçlar için
   if (rows.length === 1) {
     const row = rows[0];
@@ -169,6 +181,14 @@ async function generateAnswer(question, rows, sql) {
       }
       return formatNumber(value);
     }
+    
+    // Karşılaştırma sorularında tek sonuç varsa özel mesaj
+    if (isComparison && row.il) {
+      const value = row.toplam_uretim || row.toplam || row.toplam_alan;
+      if (value) {
+        return `${row.il} ilinde üretim mevcut: ${formatNumber(value)} ${key.includes('alan') ? 'dekar' : 'ton'}. Diğer il/illerde bu ürünün üretimi bulunmuyor.`;
+      }
+    }
   }
   
   // GPT ile cevap oluştur
@@ -180,7 +200,12 @@ async function generateAnswer(question, rows, sql) {
           role: 'system',
           content: `Tarım verileri uzmanısın. Kısa, net Türkçe cevaplar ver. 
                     Sayıları binlik ayraçla yaz. Birimler: üretim=ton, alan=dekar, verim=ton/dekar.
-                    Maximum 2-3 cümle kullan.`
+                    Maximum 2-3 cümle kullan.
+                    
+                    ÖZEL KURALLARI:
+                    - Karşılaştırma sorularında (mi/mı, fazla, daha, hangi) net karşılaştırma yap
+                    - Tek sonuç varsa diğer yerlerde üretim olmadığını belirt
+                    - "Veriye göre" gibi gereksiz ifadeler kullanma`
         }, {
           role: 'user',
           content: `Soru: ${question}
