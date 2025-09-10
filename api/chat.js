@@ -8,7 +8,7 @@ import OpenAI from 'openai';
 const TABLE = 'urunler';
 const MODEL = process.env.OPENAI_MODEL || 'gpt-4o';
 const DEFAULT_YEAR = 2024;
-const DEBUG_MODE = false; // Production'da debug bilgiler kapalı
+const DEBUG_MODE = true; // Test için debug açık
 /** ======= RATE LIMITING ======= **/
 const rateLimitMap = new Map();
 const RATE_LIMIT_WINDOW = 60000; // 1 dakika
@@ -141,6 +141,7 @@ KRİTİK KURALLAR:
      - Tüm illeri ilgili ürünün üretim miktarına göre sırala
      - RANK() OVER (ORDER BY SUM(uretim_miktari) DESC) kullan
      - İlgili ilin sıralamasını döndür
+     - Eğer sadece bir ilin sıralaması isteniyorsa, HAVING ile o ili filtrele
 ÖRNEKLER:
 Soru: "mersinn kaysı üretimi" (yazım hatalı)
 İşle: "mersin kayısı üretimi" (düzeltilmiş)
@@ -149,8 +150,8 @@ Soru: "elma üretimi"
 SQL: SELECT SUM("${uretim}") AS toplam_uretim FROM ${TABLE} WHERE (LOWER("${urun}") LIKE '%elma%' OR "${urun}" LIKE '%Elma%') AND LOWER("${urun}") NOT LIKE '%trabzon hurması%' AND LOWER("${urun}") NOT LIKE '%cennet elması%' AND LOWER("${urun}") NOT LIKE '%yer elması%'
 Soru: "Ankara elma üretimi"
 SQL: SELECT SUM("${uretim}") AS toplam_uretim FROM ${TABLE} WHERE "${il}"='Ankara' AND (LOWER("${urun}") LIKE '%elma%' OR "${urun}" LIKE '%Elma%') AND LOWER("${urun}") NOT LIKE '%trabzon hurması%' AND LOWER("${urun}") NOT LIKE '%cennet elması%' AND LOWER("${urun}") NOT LIKE '%yer elması%'
-Soru: "Mersin avokado üretiminde kaçıncı"
-SQL: SELECT il, RANK() OVER (ORDER BY SUM(uretim_miktari) DESC) AS siralama FROM ${TABLE} WHERE LOWER(urun_adi) LIKE '%avokado%' AND yil=${DEFAULT_YEAR} GROUP BY il HAVING il='Mersin'
+Soru: "Mersin mandalina üretiminde kaçıncı"
+SQL: SELECT il, RANK() OVER (ORDER BY SUM(uretim_miktari) DESC) AS siralama FROM ${TABLE} WHERE LOWER(urun_adi) LIKE '%mandalina%' AND yil=${DEFAULT_YEAR} GROUP BY il HAVING il='Mersin'
 ÇIKTI: Sadece SELECT sorgusu, noktalama yok.`;
   try {
     const response = await openai.chat.completions.create({
@@ -197,6 +198,8 @@ async function generateAnswer(question, rows, sql) {
   if (question.toLowerCase().includes('kaçıncı') && rows.length === 1 && rows[0].siralama) {
     const sira = rows[0].siralama;
     return `${rows[0].il} ${sira}. sırada.`;
+  } else if (question.toLowerCase().includes('kaçıncı') && (!rows[0].siralama || rows.length > 1)) {
+    return 'Sıralama hesaplanamadı. Lütfen verileri kontrol edin.';
   }
  
   // Basit cevaplar için hızlı return
@@ -280,7 +283,7 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: 'Soru parametresi gerekli' });
     }
    
-    // Cache kontrolü
+    // Cache kontrolü (test için geçici olarak devre dışı)
     const cached = getCachedResponse(question);
     if (cached) {
       console.log(`[CACHE HIT] ${question}`);
