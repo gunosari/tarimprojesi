@@ -180,6 +180,370 @@
             text-decoration: underline;
         }
         
+        .embed-mode {
+            box-shadow: none;
+            border-radius: 8px;
+        }
+        
+        @media (max-width: 480px) {
+            .widget-container {
+                border-radius: 8px;
+            }
+            
+            .widget-body {
+                padding: 12px;
+            }
+            
+            .input-row {
+                flex-direction: column;
+            }
+            
+            .question-input {
+                margin-bottom: 8px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="widget-container" id="tarımWidget">
+        <div class="widget-header">
+            <h3>🌾 Tarım Veri Asistanı</h3>
+            <p>Türkiye tarım verilerini sorgulayın</p>
+        </div>
+        
+        <div class="widget-body">
+            <div class="input-row">
+                <input 
+                    type="text" 
+                    id="questionInput" 
+                    class="question-input" 
+                    placeholder="Örnek: Mersin domates üretimi"
+                    maxlength="150"
+                >
+                <button id="submitBtn" class="submit-btn">Sor</button>
+            </div>
+            
+            <div class="examples">
+                <div class="examples-label">Örnekler:</div>
+                <div class="example-chips">
+                    <span class="example-chip" onclick="askExample('Mersin sebze üretimi')">Mersin sebze</span>
+                    <span class="example-chip" onclick="askExample('Antalya Adana domates karşılaştır')">Antalya Adana domates karşılaştır</span>
+                    <span class="example-chip" onclick="askExample('İzmir ekim alanı')">İzmir alan</span>
+                    <span class="example-chip" onclick="askExample('En çok elma nerede')">En çok elma</span>
+                    <span class="example-chip" onclick="askExample('Konya buğday alan')">Konya buğday alan</span>
+                    <span class="example-chip" onclick="askExample('Bursa fındık üretim')">Bursa fındık üretim</span>
+                    <span class="example-chip" onclick="askExample('Tokat kiraz')">Tokat kiraz</span>
+                    <span class="example-chip" onclick="askExample('En çok mısır')">En çok mısır</span>
+                </div>
+            </div>
+            
+            <div id="responseArea" class="response-area">
+                <div id="responseBox" class="response-box"></div>
+                <div id="metaInfo" class="meta-info"></div>
+            </div>
+        </div>
+        
+        <div class="disclaimer-bar">
+            <div class="disclaimer-source">
+                📊 <strong>Veri Kaynağı:</strong> TÜİK (Türkiye İstatistik Kurumu) • 
+                <a href="#" onclick="showDataInfo()">Verileri kontrol edin</a> • 
+                2020-2024 dönemi
+            </div>
+            <div class="disclaimer-warning">
+                ⚠️ <strong>Yapay Zeka Uyarısı:</strong> Bu sohbet asistanı, size yardımcı olmak için hazırlanmıştır. 
+                Ancak verdiğim yanıtlar her zaman %100 doğru veya güncel olmayabilir. 
+                Karar vermeden önce bilgileri kendi kaynaklarınızla doğrulamanızı tavsiye ederim.
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const API_URL = '/api/chat';
+        
+        let isLoading = false;
+        const questionInput = document.getElementById('questionInput');
+        const submitBtn = document.getElementById('submitBtn');
+        const responseArea = document.getElementById('responseArea');
+        const responseBox = document.getElementById('responseBox');
+        const metaInfo = document.getElementById('metaInfo');
+
+        questionInput.addEventListener('keypress', function(e) {
+            if (e.key === 'Enter' && !isLoading) {
+                submitQuestion();
+            }
+        });
+
+        submitBtn.addEventListener('click', submitQuestion);
+
+        function askExample(question) {
+            if (isLoading) return;
+            questionInput.value = question;
+            submitQuestion();
+        }
+
+        async function submitQuestion() {
+            const question = questionInput.value.trim();
+            
+            if (!question) {
+                showError('Bir soru girin.');
+                return;
+            }
+
+            if (isLoading) return;
+            setLoading(true);
+
+            try {
+                const response = await fetch(API_URL, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ question })
+                });
+
+                const data = await response.json();
+
+                if (!response.ok) {
+                    throw new Error(data.detail || data.error || 'Hata oluştu');
+                }
+
+                showResponse(data.answer, data.processingTime, data.cached);
+
+            } catch (error) {
+                console.error('Error:', error);
+                
+                if (error.message.includes('429')) {
+                    showError('Çok fazla istek. Bir dakika bekleyin.');
+                } else {
+                    showError('Bağlantı hatası. Tekrar deneyin.');
+                }
+            } finally {
+                setLoading(false);
+            }
+        }
+
+        function setLoading(loading) {
+            isLoading = loading;
+            
+            if (loading) {
+                submitBtn.disabled = true;
+                questionInput.disabled = true;
+                responseBox.className = 'response-box loading-box';
+                responseBox.textContent = 'Sorgulanıyor...';
+                metaInfo.textContent = '';
+                responseArea.classList.add('show');
+            } else {
+                submitBtn.disabled = false;
+                questionInput.disabled = false;
+            }
+        }
+
+        function showResponse(answer, time, cached) {
+            responseBox.className = 'response-box';
+            responseBox.textContent = answer;
+            
+            if (time) {
+                const timeText = cached ? `${time}ms (önbellek)` : `${time}ms`;
+                metaInfo.textContent = timeText;
+            }
+            
+            responseArea.classList.add('show');
+        }
+
+        function showError(message) {
+            responseBox.className = 'response-box error-box';
+            responseBox.textContent = message;
+            metaInfo.textContent = '';
+            responseArea.classList.add('show');
+        }
+
+        if (window.parent !== window) {
+            document.getElementById('tarımWidget').classList.add('embed-mode');
+        }
+
+        questionInput.focus();
+    </script>
+</body>
+</html><!doctype html>
+<html lang="tr">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Tarım Veri Asistanı</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        .widget-container {
+            font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+            width: 100%;
+            max-width: 400px;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.1);
+            border: 1px solid #e5e7eb;
+            overflow: hidden;
+        }
+        
+        .widget-header {
+            background: linear-gradient(135deg, #0B3D91 0%, #1e40af 100%);
+            color: white;
+            padding: 12px 16px;
+            text-align: center;
+        }
+        
+        .widget-header h3 {
+            font-size: 16px;
+            font-weight: 600;
+            margin-bottom: 2px;
+        }
+        
+        .widget-header p {
+            font-size: 12px;
+            opacity: 0.9;
+        }
+        
+        .widget-body {
+            padding: 16px;
+        }
+        
+        .input-row {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 12px;
+        }
+        
+        .question-input {
+            flex: 1;
+            padding: 10px 12px;
+            border: 1px solid #d1d5db;
+            border-radius: 6px;
+            font-size: 14px;
+            transition: border-color 0.2s;
+        }
+        
+        .question-input:focus {
+            outline: none;
+            border-color: #0B3D91;
+        }
+        
+        .submit-btn {
+            background: #0B3D91;
+            color: white;
+            border: none;
+            padding: 10px 16px;
+            border-radius: 6px;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        
+        .submit-btn:hover:not(:disabled) {
+            background: #0a2d6b;
+        }
+        
+        .submit-btn:disabled {
+            background: #9ca3af;
+            cursor: not-allowed;
+        }
+        
+        .examples {
+            margin-bottom: 12px;
+        }
+        
+        .examples-label {
+            font-size: 12px;
+            color: #6b7280;
+            margin-bottom: 6px;
+        }
+        
+        .example-chips {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 4px;
+        }
+        
+        .example-chip {
+            background: #f9fafb;
+            border: 1px solid #e5e7eb;
+            color: #374151;
+            padding: 4px 8px;
+            border-radius: 12px;
+            font-size: 11px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        
+        .example-chip:hover {
+            background: #f3f4f6;
+        }
+        
+        .response-area {
+            margin-top: 12px;
+            padding-top: 12px;
+            border-top: 1px solid #e5e7eb;
+            display: none;
+        }
+        
+        .response-area.show {
+            display: block;
+        }
+        
+        .response-box {
+            background: #f0fdf4;
+            border: 1px solid #bbf7d0;
+            border-left: 3px solid #10b981;
+            border-radius: 6px;
+            padding: 12px;
+            font-size: 14px;
+            color: #065f46;
+            line-height: 1.4;
+            min-height: 40px;
+        }
+        
+        .error-box {
+            background: #fef2f2;
+            border: 1px solid #fecaca;
+            border-left: 3px solid #ef4444;
+            color: #dc2626;
+        }
+        
+        .loading-box {
+            background: #f8fafc;
+            border: 1px solid #e2e8f0;
+            color: #64748b;
+            text-align: center;
+            font-style: italic;
+        }
+        
+        .meta-info {
+            font-size: 10px;
+            color: #9ca3af;
+            margin-top: 6px;
+            text-align: right;
+        }
+        
+        .disclaimer-bar {
+            background: #f8f9fa;
+            border-top: 1px solid #e5e7eb;
+            padding: 8px 16px;
+            text-align: center;
+            font-size: 11px;
+            color: #6b7280;
+            line-height: 1.3;
+        }
+        
+        .disclaimer-bar a {
+            color: #0B3D91;
+            text-decoration: none;
+        }
+        
+        .disclaimer-bar a:hover {
+            text-decoration: underline;
+        }
+        
         /* Embed modunda margin/shadow kaldır */
         .embed-mode {
             box-shadow: none;
