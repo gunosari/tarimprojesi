@@ -171,7 +171,7 @@ VERI KAYNAGI:
 
 ------------------------
 NeoBi Tarim Istatistikleri
-www.neobi.com.tr`;
+www.tarim.emomonsdijital.com`;
 
   return bilgiNotu;
 }
