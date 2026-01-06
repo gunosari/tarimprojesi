@@ -9,12 +9,12 @@ import OpenAI from 'openai';
 const TABLE = 'urunler';
 const MODEL = process.env.OPENAI_MODEL || 'gpt-4o';
 const DEFAULT_YEAR = 2024;
-const DEBUG_MODE = true; // Test için açık tutun, logları kontrol edin
+const DEBUG_MODE = true;
 
 /** ======= RATE LIMITING ======= **/
 const rateLimitMap = new Map();
-const RATE_LIMIT_WINDOW = 60000; // 1 dakika
-const RATE_LIMIT_MAX = 15; // 15 request per dakika per IP
+const RATE_LIMIT_WINDOW = 60000;
+const RATE_LIMIT_MAX = 15;
 
 function checkRateLimit(ip) {
   const now = Date.now();
@@ -28,8 +28,7 @@ function checkRateLimit(ip) {
   recentRequests.push(now);
   rateLimitMap.set(ip, recentRequests);
  
-  // Clean old entries periodically
-  if (Math.random() < 0.01) { // 1% chance
+  if (Math.random() < 0.01) {
     for (const [key, value] of rateLimitMap.entries()) {
       const filtered = value.filter(time => now - time < RATE_LIMIT_WINDOW);
       if (filtered.length === 0) {
@@ -45,7 +44,7 @@ function checkRateLimit(ip) {
 
 /** ======= SIMPLE CACHE ======= **/
 const responseCache = new Map();
-const CACHE_TTL = 300000; // 5 dakika
+const CACHE_TTL = 300000;
 const MAX_CACHE_SIZE = 100;
 
 function getCachedResponse(question) {
@@ -63,7 +62,6 @@ function getCachedResponse(question) {
 function setCachedResponse(question, data) {
   const key = question.toLowerCase().trim();
  
-  // Simple LRU: remove oldest if cache is full
   if (responseCache.size >= MAX_CACHE_SIZE) {
     const oldestKey = responseCache.keys().next().value;
     responseCache.delete(oldestKey);
@@ -109,67 +107,58 @@ function getClientIP(req) {
          'unknown';
 }
 
-/** ======= BİLGİ NOTU OLUŞTURMA (YENİ) ======= **/
+/** ======= BİLGİ NOTU OLUŞTURMA ======= **/
 function createBilgiNotu(question, rows, sql) {
-  // "bilgi notu" kelimesi geçmiyorsa null döndür
   if (!question.toLowerCase().includes('bilgi notu')) {
     return null;
   }
   
-  // SQL'den il ve ürün bilgisini çıkar
   const ilMatch = sql.match(/["']il["']\s*=\s*['"]([^'"]+)['"]/i) || 
                   sql.match(/il\s*=\s*['"]([^'"]+)['"]/i);
   const urunMatch = sql.match(/LIKE\s+['"]%([^%]+)%['"]/i) || 
                     sql.match(/urun_adi['"]\s*LIKE\s+['"]%([^%]+)%['"]/i);
   
-  const il = ilMatch ? ilMatch[1] : 'Türkiye Geneli';
-  const urun = urunMatch ? urunMatch[1] : 'Genel Tarım';
+  const il = ilMatch ? ilMatch[1] : 'Türkiye';
+  const urun = urunMatch ? urunMatch[1] : 'Genel';
   
-  // Veriden değerleri al
   const toplam = rows[0]?.toplam_uretim || rows[0]?.uretim_miktari || 0;
   const alan = rows[0]?.toplam_alan || rows[0]?.uretim_alani || 0;
   const verim = rows[0]?.verim || 0;
-  const siralama = rows[0]?.siralama || '-';
   
-  // Tarih formatı
   const tarih = new Date().toLocaleDateString('tr-TR', {
     day: '2-digit',
     month: '2-digit', 
     year: 'numeric'
   });
   
-  // Üretim değerlendirmesi
   let degerlendirme = '';
   if (toplam > 1000000) {
-    degerlendirme = 'Türkiye\'nin en önemli üretim merkezlerinden biri';
+    degerlendirme = 'Türkiye\'nin en önemli üretim merkezlerinden';
   } else if (toplam > 100000) {
     degerlendirme = 'Önemli bir üretim merkezi';
   } else if (toplam > 10000) {
     degerlendirme = 'Orta ölçekli üretici';
   } else {
-    degerlendirme = 'Yerel üretici konumunda';
+    degerlendirme = 'Yerel üretici';
   }
   
-  // Bilgi notu formatı
-  const bilgiNotu = `📋 *TARIM BİLGİ NOTU*
-${'═'.repeat(25)}
+  const bilgiNotu = `📋 TARIM BİLGİ NOTU
+═══════════════════════
 📅 Tarih: ${tarih}
 📍 İl: ${il}
 🌾 Ürün: ${urun.charAt(0).toUpperCase() + urun.slice(1).toLowerCase()}
 
-*📊 TEMEL GÖSTERGELER:*
+📊 TEMEL GÖSTERGELER:
 - Üretim: ${formatNumber(toplam)} ton
 - Alan: ${formatNumber(alan)} dekar
 - Verim: ${verim} kg/dekar
-${siralama !== '-' ? `• Türkiye Sırası: ${siralama}` : ''}
 
-*💡 DEĞERLENDİRME:*
-${il} ili, ${urun} üretiminde ${degerlendirme}.
+💡 DEĞERLENDİRME:
+${il} ili ${urun} üretiminde ${degerlendirme}.
 
-*📈 DETAY:*
+📈 VERİ KAYNAĞI:
 - Yıl: ${DEFAULT_YEAR}
-- Veri Kaynağı: TÜİK
-- Güncelleme: 2024 Q4
+- Kaynak: TÜİK
 
 ─────────────────
 NeoBi Tarım İstatistikleri
@@ -228,21 +217,13 @@ KRİTİK KURALLAR:
      - Önce tüm illerin üretim toplamını hesapla (subquery ile)
      - Sonra RANK() OVER (ORDER BY toplam_uretim DESC) kullanarak sıralama pozisyonunu hesapla
      - En dışta ilgili il için filtrele, böylece rank tüm illere göre doğru olsun
-     - HATALI OLMA: SADECE BİR İLİN VERİSİNİ ALMA, TÜM İLLERİ KARŞILAŞTIR
 
 ÖRNEKLER:
 Soru: "mersinn kaysı üretimi" (yazım hatalı)
-İşle: "mersin kayısı üretimi" (düzeltilmiş)
 SQL: SELECT SUM("${uretim}") AS toplam_uretim FROM ${TABLE} WHERE "${il}"='Mersin' AND LOWER("${urun}") LIKE '%kayısı%'
 
-Soru: "elma üretimi"
-SQL: SELECT SUM("${uretim}") AS toplam_uretim FROM ${TABLE} WHERE (LOWER("${urun}") LIKE '%elma%' OR "${urun}" LIKE '%Elma%') AND LOWER("${urun}") NOT LIKE '%trabzon hurması%' AND LOWER("${urun}") NOT LIKE '%cennet elması%' AND LOWER("${urun}") NOT LIKE '%yer elması%'
-
 Soru: "Ankara elma üretimi"
-SQL: SELECT SUM("${uretim}") AS toplam_uretim FROM ${TABLE} WHERE "${il}"='Ankara' AND (LOWER("${urun}") LIKE '%elma%' OR "${urun}" LIKE '%Elma%') AND LOWER("${urun}") NOT LIKE '%trabzon hurması%' AND LOWER("${urun}") NOT LIKE '%cennet elması%' AND LOWER("${urun}") NOT LIKE '%yer elması%'
-
-Soru: "Mersin avokado üretiminde kaçıncı"
-SQL: SELECT il, siralama FROM (SELECT il, RANK() OVER (ORDER BY toplam_uretim DESC) AS siralama FROM (SELECT il, SUM(uretim_miktari) AS toplam_uretim FROM urunler WHERE LOWER(urun_adi) LIKE '%avokado%' AND yil=${DEFAULT_YEAR} GROUP BY il)) WHERE il='Mersin'
+SQL: SELECT SUM("${uretim}") AS toplam_uretim FROM ${TABLE} WHERE "${il}"='Ankara' AND (LOWER("${urun}") LIKE '%elma%' OR "${urun}" LIKE '%Elma%')
 
 ÇIKTI: Sadece SELECT sorgusu, noktalama yok.`;
 
@@ -270,24 +251,21 @@ SQL: SELECT il, siralama FROM (SELECT il, RANK() OVER (ORDER BY toplam_uretim DE
 }
 
 async function generateAnswer(question, rows, sql) {
-  // Önce bilgi notu kontrolü yap
+  // Önce bilgi notu kontrolü
   const bilgiNotu = createBilgiNotu(question, rows, sql);
   if (bilgiNotu) {
     return bilgiNotu;
   }
   
-  // Veri yoksa
   if (!rows || rows.length === 0) {
     return 'Bu sorguya uygun veri bulunamadı.';
   }
  
-  // Sıralama soruları için özel mantık
   if (question.toLowerCase().includes('kaçıncı') && rows.length === 1 && rows[0].siralama) {
     const sira = rows[0].siralama;
     return `${rows[0].il} ${sira}. sırada.`;
   }
  
-  // Basit cevaplar için hızlı return
   if (rows.length === 1) {
     const row = rows[0];
     const keys = Object.keys(row);
@@ -310,7 +288,6 @@ async function generateAnswer(question, rows, sql) {
     }
   }
  
-  // Karmaşık cevaplar için GPT kullan
   if (process.env.OPENAI_API_KEY) {
     try {
       const response = await openai.chat.completions.create({
@@ -354,7 +331,6 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: 'Sadece POST metodu desteklenir' });
   }
  
-  // Rate limiting
   if (!checkRateLimit(clientIP)) {
     return res.status(429).json({
       error: 'Çok fazla istek',
@@ -369,7 +345,6 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: 'Soru parametresi gerekli' });
     }
    
-    // Cache kontrolü
     const cached = getCachedResponse(question);
     if (cached) {
       console.log(`[CACHE HIT] ${question}`);
@@ -382,7 +357,6 @@ export default async function handler(req, res) {
    
     console.log(`[${new Date().toISOString()}] IP: ${clientIP}, Soru: ${question}`);
    
-    // SQLite initialize
     const SQL = await initSqlJs({
       locateFile: (file) => path.join(process.cwd(), 'node_modules/sql.js/dist', file)
     });
@@ -395,7 +369,6 @@ export default async function handler(req, res) {
     const dbBuffer = fs.readFileSync(dbPath);
     const db = new SQL.Database(dbBuffer);
    
-    // SQL oluştur
     let sql;
     try {
       sql = await nlToSQL(question, getSchema());
@@ -407,12 +380,10 @@ export default async function handler(req, res) {
       });
     }
    
-    // Güvenlik
     if (!isSafeSQL(sql)) {
       return res.status(400).json({ error: 'Güvenli olmayan sorgu' });
     }
    
-    // SQL çalıştır
     let rows = [];
     try {
       const stmt = db.prepare(sql);
@@ -431,10 +402,9 @@ export default async function handler(req, res) {
       db.close();
     }
    
-    // Cevap oluştur
     const answer = await generateAnswer(question, rows, sql);
    
-    // WhatsApp linki oluştur (bilgi notu için)
+    // WhatsApp linki (bilgi notu için)
     let whatsappLink = null;
     if (question.toLowerCase().includes('bilgi notu')) {
       const encodedText = encodeURIComponent(answer);
@@ -446,15 +416,14 @@ export default async function handler(req, res) {
       answer: answer,
       data: rows.slice(0, 10),
       totalRows: rows.length,
-      whatsappLink: whatsappLink, // YENİ ALAN
-      isBilgiNotu: question.toLowerCase().includes('bilgi notu'), // YENİ ALAN
+      whatsappLink: whatsappLink,
+      isBilgiNotu: question.toLowerCase().includes('bilgi notu'),
       processingTime: Date.now() - startTime,
       debug: DEBUG_MODE ? { sql, sampleRows: rows.slice(0, 2) } : null
     };
    
-    // Cache'e kaydet
     setCachedResponse(question, response);
-   
+    
     res.status(200).json(response);
    
   } catch (error) {
@@ -466,17 +435,3 @@ export default async function handler(req, res) {
     });
   }
 }
-```
-
-## Değişiklikler Özeti
-
-**Eklenenler:**
-1. **createBilgiNotu fonksiyonu** (satır 115-182)
-2. **generateAnswer güncellendi** (bilgi notu kontrolü eklendi)
-3. **Response'a whatsappLink ve isBilgiNotu alanları** eklendi
-
-**Test için örnekler:**
-```
-"Konya buğday bilgi notu"
-"Antalya domates bilgi notu oluştur"
-"Mersin portakal için bilgi notu hazırla"
