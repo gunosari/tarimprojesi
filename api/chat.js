@@ -107,7 +107,7 @@ function getClientIP(req) {
          'unknown';
 }
 
-/** ======= BİLGİ NOTU OLUŞTURMA (YENİ VE DÜZELTİLMİŞ) ======= **/
+/** ======= BİLGİ NOTU OLUŞTURMA (VERİM DÜZELTMELİ) ======= **/
 function createBilgiNotu(question, rows, sql) {
   if (!question.toLowerCase().includes('bilgi notu')) {
     return null;
@@ -125,9 +125,16 @@ function createBilgiNotu(question, rows, sql) {
   // Veriden değerleri al
   const toplam = rows[0]?.toplam_uretim || rows[0]?.uretim_miktari || 0;
   const alan = rows[0]?.toplam_alan || rows[0]?.uretim_alani || 0;
-  const verim = rows[0]?.verim || 0;
   
-  // Tarih (06.01.2025 olarak sabit)
+  // Verim hesapla: Üretim(ton) / Alan(dekar) * 1000 = kg/dekar
+  let verim = 0;
+  if (alan > 0 && toplam > 0) {
+    verim = Math.round((toplam / alan) * 1000); // ton/dekar'ı kg/dekar'a çevir
+  } else if (rows[0]?.verim) {
+    verim = Math.round(rows[0].verim);
+  }
+  
+  // Tarih
   const tarih = '06.01.2025';
   
   // Değerlendirme
@@ -142,7 +149,7 @@ function createBilgiNotu(question, rows, sql) {
     degerlendirme = 'yerel üretici konumunda';
   }
   
-  // Temiz metin formatı (emoji yok)
+  // Temiz metin formatı
   const bilgiNotu = `TARIM BILGI NOTU
 ========================
 
@@ -153,7 +160,7 @@ Urun: ${urun.charAt(0).toUpperCase() + urun.slice(1).toLowerCase()}
 TEMEL GOSTERGELER:
 - Uretim: ${formatNumber(Math.round(toplam))} ton
 - Alan: ${formatNumber(Math.round(alan))} dekar
-- Verim: ${Math.round(verim || 0)} kg/dekar
+- Verim: ${verim} kg/dekar
 
 DEGERLENDIRME:
 ${il} ili ${urun} uretiminde ${degerlendirme}.
@@ -164,7 +171,7 @@ VERI KAYNAGI:
 
 ------------------------
 NeoBi Tarim Istatistikleri
-www.tarim.emomonsdijital.com`;
+www.neobi.com.tr`;
 
   return bilgiNotu;
 }
@@ -188,10 +195,14 @@ async function nlToSQL(question, schema) {
       ilName = 'Konya';
     } else if (words.includes('Antalya') || words.includes('antalya')) {
       ilName = 'Antalya';
-    } else if (words.includes('İzmir') || words.includes('izmir')) {
+    } else if (words.includes('İzmir') || words.includes('izmir') || words.includes('İzmir')) {
       ilName = 'İzmir';
     } else if (words.includes('Mersin') || words.includes('mersin')) {
       ilName = 'Mersin';
+    } else if (words.includes('Adana') || words.includes('adana')) {
+      ilName = 'Adana';
+    } else if (words.includes('Bursa') || words.includes('bursa')) {
+      ilName = 'Bursa';
     }
     
     if (words.includes('buğday') || words.includes('bugday')) {
@@ -202,10 +213,27 @@ async function nlToSQL(question, schema) {
       urunName = 'üzüm';
     } else if (words.includes('portakal')) {
       urunName = 'portakal';
+    } else if (words.includes('elma')) {
+      urunName = 'elma';
+    } else if (words.includes('mısır') || words.includes('misir')) {
+      urunName = 'mısır';
     }
     
     if (ilName && urunName) {
-      return `SELECT "${il}" as il, SUM("${uretim}") as toplam_uretim, SUM("${alan}") as toplam_alan, AVG("${verim}") as verim FROM ${TABLE} WHERE "${il}"='${ilName}' AND LOWER("${urun}") LIKE '%${urunName}%' AND "${yil}"=${DEFAULT_YEAR} GROUP BY "${il}"`;
+      // Verim hesaplaması için düzeltilmiş SQL
+      return `SELECT 
+        "${il}" as il, 
+        SUM("${uretim}") as toplam_uretim, 
+        SUM("${alan}") as toplam_alan,
+        CASE 
+          WHEN SUM("${alan}") > 0 THEN ROUND(CAST(SUM("${uretim}") AS FLOAT) / SUM("${alan}") * 1000)
+          ELSE 0 
+        END as verim
+      FROM ${TABLE} 
+      WHERE "${il}"='${ilName}' 
+      AND LOWER("${urun}") LIKE '%${urunName}%' 
+      AND "${yil}"=${DEFAULT_YEAR} 
+      GROUP BY "${il}"`;
     }
   }
  
@@ -247,20 +275,18 @@ KRİTİK KURALLAR:
    - SUM() kullan, "en çok" → ORDER BY DESC
 
 5. SIRALAMA SORULARI:
-   - Soru "kaçıncı" içeriyorsa:
-     - Önce tüm illerin üretim toplamını hesapla (subquery ile)
-     - Sonra RANK() OVER (ORDER BY toplam_uretim DESC) kullanarak sıralama pozisyonunu hesapla
-     - En dışta ilgili il için filtrele, böylece rank tüm illere göre doğru olsun
+   - Soru "kaçıncı" içeriyorsa tüm illerin üretim toplamını hesapla
+
+6. BİLGİ NOTU İÇİN:
+   - Hem üretim hem alan hem verim değerlerini getir
+   - GROUP BY kullan
 
 ÖRNEKLER:
-Soru: "mersinn kaysı üretimi" (yazım hatalı)
-SQL: SELECT SUM("${uretim}") AS toplam_uretim FROM ${TABLE} WHERE "${il}"='Mersin' AND LOWER("${urun}") LIKE '%kayısı%'
+Soru: "Konya buğday bilgi notu"
+SQL: SELECT "${il}" as il, SUM("${uretim}") as toplam_uretim, SUM("${alan}") as toplam_alan FROM ${TABLE} WHERE "${il}"='Konya' AND LOWER("${urun}") LIKE '%buğday%' AND "${yil}"=${DEFAULT_YEAR} GROUP BY "${il}"
 
 Soru: "Ankara elma üretimi"
 SQL: SELECT SUM("${uretim}") AS toplam_uretim FROM ${TABLE} WHERE "${il}"='Ankara' AND (LOWER("${urun}") LIKE '%elma%' OR "${urun}" LIKE '%Elma%')
-
-Soru: "Konya buğday bilgi notu"
-SQL: SELECT "${il}" as il, SUM("${uretim}") as toplam_uretim, SUM("${alan}") as toplam_alan, AVG("${verim}") as verim FROM ${TABLE} WHERE "${il}"='Konya' AND LOWER("${urun}") LIKE '%buğday%' AND "${yil}"=${DEFAULT_YEAR} GROUP BY "${il}"
 
 ÇIKTI: Sadece SELECT sorgusu, noktalama yok.`;
 
