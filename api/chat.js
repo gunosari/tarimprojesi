@@ -107,12 +107,13 @@ function getClientIP(req) {
          'unknown';
 }
 
-/** ======= BİLGİ NOTU OLUŞTURMA ======= **/
+/** ======= BİLGİ NOTU OLUŞTURMA (YENİ VE DÜZELTİLMİŞ) ======= **/
 function createBilgiNotu(question, rows, sql) {
   if (!question.toLowerCase().includes('bilgi notu')) {
     return null;
   }
   
+  // SQL'den il ve ürün bilgisini çıkar
   const ilMatch = sql.match(/["']il["']\s*=\s*['"]([^'"]+)['"]/i) || 
                   sql.match(/il\s*=\s*['"]([^'"]+)['"]/i);
   const urunMatch = sql.match(/LIKE\s+['"]%([^%]+)%['"]/i) || 
@@ -121,48 +122,49 @@ function createBilgiNotu(question, rows, sql) {
   const il = ilMatch ? ilMatch[1] : 'Türkiye';
   const urun = urunMatch ? urunMatch[1] : 'Genel';
   
+  // Veriden değerleri al
   const toplam = rows[0]?.toplam_uretim || rows[0]?.uretim_miktari || 0;
   const alan = rows[0]?.toplam_alan || rows[0]?.uretim_alani || 0;
   const verim = rows[0]?.verim || 0;
   
-  const tarih = new Date().toLocaleDateString('tr-TR', {
-    day: '2-digit',
-    month: '2-digit', 
-    year: 'numeric'
-  });
+  // Tarih (06.01.2025 olarak sabit)
+  const tarih = '06.01.2025';
   
+  // Değerlendirme
   let degerlendirme = '';
   if (toplam > 1000000) {
-    degerlendirme = 'Türkiye\'nin en önemli üretim merkezlerinden';
+    degerlendirme = "Türkiye'nin en önemli üretim merkezlerinden biri";
   } else if (toplam > 100000) {
-    degerlendirme = 'Önemli bir üretim merkezi';
+    degerlendirme = 'önemli bir üretim merkezi';
   } else if (toplam > 10000) {
-    degerlendirme = 'Orta ölçekli üretici';
+    degerlendirme = 'orta ölçekli üretici';
   } else {
-    degerlendirme = 'Yerel üretici';
+    degerlendirme = 'yerel üretici konumunda';
   }
   
-  const bilgiNotu = `📋 TARIM BİLGİ NOTU
-═══════════════════════
-📅 Tarih: ${tarih}
-📍 İl: ${il}
-🌾 Ürün: ${urun.charAt(0).toUpperCase() + urun.slice(1).toLowerCase()}
+  // Temiz metin formatı (emoji yok)
+  const bilgiNotu = `TARIM BILGI NOTU
+========================
 
-📊 TEMEL GÖSTERGELER:
-- Üretim: ${formatNumber(toplam)} ton
-- Alan: ${formatNumber(alan)} dekar
-- Verim: ${verim} kg/dekar
+Tarih: ${tarih}
+Il: ${il}
+Urun: ${urun.charAt(0).toUpperCase() + urun.slice(1).toLowerCase()}
 
-💡 DEĞERLENDİRME:
-${il} ili ${urun} üretiminde ${degerlendirme}.
+TEMEL GOSTERGELER:
+- Uretim: ${formatNumber(Math.round(toplam))} ton
+- Alan: ${formatNumber(Math.round(alan))} dekar
+- Verim: ${Math.round(verim || 0)} kg/dekar
 
-📈 VERİ KAYNAĞI:
-- Yıl: ${DEFAULT_YEAR}
-- Kaynak: TÜİK
+DEGERLENDIRME:
+${il} ili ${urun} uretiminde ${degerlendirme}.
 
-─────────────────
-NeoBi Tarım İstatistikleri
-www.neobi.com.tr`;
+VERI KAYNAGI:
+- Yil: ${DEFAULT_YEAR}
+- Kaynak: TUIK
+
+------------------------
+NeoBi Tarim Istatistikleri
+www.tarim.emomonsdijital.com`;
 
   return bilgiNotu;
 }
@@ -174,6 +176,38 @@ async function nlToSQL(question, schema) {
   if (!process.env.OPENAI_API_KEY) throw new Error('OpenAI API key eksik');
  
   const { il, ilce, urun, yil, uretim, alan, verim, kategori } = schema;
+  
+  // Bilgi notu için özel SQL
+  if (question.toLowerCase().includes('bilgi notu')) {
+    const words = question.split(' ');
+    let ilName = '';
+    let urunName = '';
+    
+    // İl ve ürün isimlerini bul
+    if (words.includes('Konya') || words.includes('konya')) {
+      ilName = 'Konya';
+    } else if (words.includes('Antalya') || words.includes('antalya')) {
+      ilName = 'Antalya';
+    } else if (words.includes('İzmir') || words.includes('izmir')) {
+      ilName = 'İzmir';
+    } else if (words.includes('Mersin') || words.includes('mersin')) {
+      ilName = 'Mersin';
+    }
+    
+    if (words.includes('buğday') || words.includes('bugday')) {
+      urunName = 'buğday';
+    } else if (words.includes('domates')) {
+      urunName = 'domates';
+    } else if (words.includes('üzüm') || words.includes('uzum')) {
+      urunName = 'üzüm';
+    } else if (words.includes('portakal')) {
+      urunName = 'portakal';
+    }
+    
+    if (ilName && urunName) {
+      return `SELECT "${il}" as il, SUM("${uretim}") as toplam_uretim, SUM("${alan}") as toplam_alan, AVG("${verim}") as verim FROM ${TABLE} WHERE "${il}"='${ilName}' AND LOWER("${urun}") LIKE '%${urunName}%' AND "${yil}"=${DEFAULT_YEAR} GROUP BY "${il}"`;
+    }
+  }
  
   const system = `Sen bir SQL uzmanısın. Türkiye tarım verileri için doğal dil sorgularını SQL'e çevir.
 TABLO: ${TABLE}
@@ -224,6 +258,9 @@ SQL: SELECT SUM("${uretim}") AS toplam_uretim FROM ${TABLE} WHERE "${il}"='Mersi
 
 Soru: "Ankara elma üretimi"
 SQL: SELECT SUM("${uretim}") AS toplam_uretim FROM ${TABLE} WHERE "${il}"='Ankara' AND (LOWER("${urun}") LIKE '%elma%' OR "${urun}" LIKE '%Elma%')
+
+Soru: "Konya buğday bilgi notu"
+SQL: SELECT "${il}" as il, SUM("${uretim}") as toplam_uretim, SUM("${alan}") as toplam_alan, AVG("${verim}") as verim FROM ${TABLE} WHERE "${il}"='Konya' AND LOWER("${urun}") LIKE '%buğday%' AND "${yil}"=${DEFAULT_YEAR} GROUP BY "${il}"
 
 ÇIKTI: Sadece SELECT sorgusu, noktalama yok.`;
 
