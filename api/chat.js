@@ -1,227 +1,500 @@
-// api/apichat2.js — NeoBi Karar Destek Sistemi API (Claude API)
-export const config = { runtime: 'nodejs', maxDuration: 60 };
-
+// api/chat.js — Türkiye Tarım Veritabanı Chatbot - Production Ready
+export const config = { runtime: 'nodejs', maxDuration: 30 };
 import fs from 'fs';
 import path from 'path';
 import initSqlJs from 'sql.js';
-import Anthropic from '@anthropic-ai/sdk';
+import OpenAI from 'openai';
 
-/** ======= CONFIG ======= */
-const DB_FILE = 'kds_vt.db';
-const TABLE = 'kds';
-const MODEL = 'claude-sonnet-4-20250514';
-const MAX_TOKENS = 4096;
+/** ======= CONFIG ======= **/
+const TABLE = 'urunler';
+const MODEL = process.env.OPENAI_MODEL || 'gpt-4o';
+const DEFAULT_YEAR = 2024;
+const DEBUG_MODE = true;
 
-/** ======= RATE LIMITING ======= */
+/** ======= RATE LIMITING ======= **/
 const rateLimitMap = new Map();
 const RATE_LIMIT_WINDOW = 60000;
-const RATE_LIMIT_MAX = 10;
+const RATE_LIMIT_MAX = 15;
 
 function checkRateLimit(ip) {
   const now = Date.now();
   const requests = rateLimitMap.get(ip) || [];
   const recentRequests = requests.filter(time => now - time < RATE_LIMIT_WINDOW);
-  
+ 
   if (recentRequests.length >= RATE_LIMIT_MAX) {
     return false;
   }
-  
+ 
   recentRequests.push(now);
   rateLimitMap.set(ip, recentRequests);
+ 
+  if (Math.random() < 0.01) {
+    for (const [key, value] of rateLimitMap.entries()) {
+      const filtered = value.filter(time => now - time < RATE_LIMIT_WINDOW);
+      if (filtered.length === 0) {
+        rateLimitMap.delete(key);
+      } else {
+        rateLimitMap.set(key, filtered);
+      }
+    }
+  }
+ 
   return true;
 }
 
-/** ======= DATABASE ======= */
-let dbInstance = null;
-async function getDB() {
-  if (dbInstance) return dbInstance;
-  
-  const SQL = await initSqlJs({
-    locateFile: (file) => `https://sql.js.org/dist/${file}`
-  });
-  const dbPath = path.join(process.cwd(), 'public', DB_FILE);
-  const buffer = fs.readFileSync(dbPath);
-  dbInstance = new SQL.Database(buffer);
-  
-  return dbInstance;
+/** ======= SIMPLE CACHE ======= **/
+const responseCache = new Map();
+const CACHE_TTL = 300000;
+const MAX_CACHE_SIZE = 100;
+
+function getCachedResponse(question) {
+  const key = question.toLowerCase().trim();
+  const cached = responseCache.get(key);
+ 
+  if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
+    return cached.data;
+  }
+ 
+  responseCache.delete(key);
+  return null;
 }
 
-/** ======= PREDEFINED QUERIES ======= */
-const IL_SORULARI = [
-  { id: 1, soru: "Bu ilde en çok üretilen 5 ürün nedir?", sql: `SELECT "Ürün", SUM("Üretim") as toplam FROM kds WHERE "İl" = ? GROUP BY "Ürün" ORDER BY toplam DESC LIMIT 5` },
-  { id: 2, soru: "Son 3 yılda üretim trendi nasıl?", sql: `SELECT "Yıl", SUM("Üretim") as toplam FROM kds WHERE "İl" = ? AND "Yıl" >= 2022 GROUP BY "Yıl" ORDER BY "Yıl"` },
-  { id: 3, soru: "Verim ortalaması Türkiye ortalamasının üstünde mi?", sql: `SELECT "Ürün Grubu", AVG("Verim") as il_verim, (SELECT AVG("Verim") FROM kds WHERE "Ürün Grubu" = k."Ürün Grubu") as tr_verim FROM kds k WHERE "İl" = ? GROUP BY "Ürün Grubu"` },
-  { id: 4, soru: "Hangi ürün grubunda en güçlü?", sql: `SELECT "Ürün Grubu", SUM("Üretim") as toplam, SUM("Alan") as alan FROM kds WHERE "İl" = ? GROUP BY "Ürün Grubu" ORDER BY toplam DESC LIMIT 1` },
-  { id: 5, soru: "Üretimi en çok artan ürün hangisi?", sql: `SELECT "Ürün", (SELECT SUM("Üretim") FROM kds WHERE "İl" = ? AND "Ürün" = k."Ürün" AND "Yıl" = 2024) - (SELECT SUM("Üretim") FROM kds WHERE "İl" = ? AND "Ürün" = k."Ürün" AND "Yıl" = 2020) as fark FROM kds k WHERE "İl" = ? GROUP BY "Ürün" ORDER BY fark DESC LIMIT 3` },
-  { id: 6, soru: "Üretimi en çok azalan ürün hangisi?", sql: `SELECT "Ürün", (SELECT SUM("Üretim") FROM kds WHERE "İl" = ? AND "Ürün" = k."Ürün" AND "Yıl" = 2024) - (SELECT SUM("Üretim") FROM kds WHERE "İl" = ? AND "Ürün" = k."Ürün" AND "Yıl" = 2020) as fark FROM kds k WHERE "İl" = ? GROUP BY "Ürün" ORDER BY fark ASC LIMIT 3` },
-  { id: 7, soru: "Toplam ekim alanı ne kadar?", sql: `SELECT "Yıl", SUM("Alan") as toplam_alan FROM kds WHERE "İl" = ? GROUP BY "Yıl" ORDER BY "Yıl" DESC LIMIT 5` },
-  { id: 8, soru: "Ürün çeşitliliği ne durumda?", sql: `SELECT COUNT(DISTINCT "Ürün") as urun_sayisi, COUNT(DISTINCT "Ürün Grubu") as grup_sayisi FROM kds WHERE "İl" = ?` },
-  { id: 9, soru: "En verimli ürünler hangileri?", sql: `SELECT "Ürün", AVG("Verim") as ort_verim FROM kds WHERE "İl" = ? AND "Verim" > 0 GROUP BY "Ürün" ORDER BY ort_verim DESC LIMIT 5` },
-  { id: 10, soru: "Yıllık üretim değişim oranı nedir?", sql: `SELECT "Yıl", SUM("Üretim") as uretim FROM kds WHERE "İl" = ? GROUP BY "Yıl" ORDER BY "Yıl"` }
-];
+function setCachedResponse(question, data) {
+  const key = question.toLowerCase().trim();
+ 
+  if (responseCache.size >= MAX_CACHE_SIZE) {
+    const oldestKey = responseCache.keys().next().value;
+    responseCache.delete(oldestKey);
+  }
+ 
+  responseCache.set(key, {
+    data: data,
+    timestamp: Date.now()
+  });
+}
 
-const URUN_SORULARI = [
-  { id: 1, soru: "Bu ürünü en çok üreten 5 il hangisi?", sql: `SELECT "İl", SUM("Üretim") as toplam FROM kds WHERE "Ürün" = ? GROUP BY "İl" ORDER BY toplam DESC LIMIT 5` },
-  { id: 2, soru: "Son 5 yılda Türkiye geneli üretim trendi nasıl?", sql: `SELECT "Yıl", SUM("Üretim") as toplam FROM kds WHERE "Ürün" = ? AND "Yıl" >= 2020 GROUP BY "Yıl" ORDER BY "Yıl"` },
-  { id: 3, soru: "Ortalama verim ne kadar?", sql: `SELECT "Yıl", AVG("Verim") as ort_verim FROM kds WHERE "Ürün" = ? GROUP BY "Yıl" ORDER BY "Yıl" DESC LIMIT 5` },
-  { id: 4, soru: "Toplam ekim alanı ne kadar?", sql: `SELECT "Yıl", SUM("Alan") as toplam_alan FROM kds WHERE "Ürün" = ? GROUP BY "Yıl" ORDER BY "Yıl" DESC LIMIT 5` },
-  { id: 5, soru: "Üretimi en çok artan iller hangileri?", sql: `SELECT "İl", (SELECT SUM("Üretim") FROM kds WHERE "Ürün" = ? AND "İl" = k."İl" AND "Yıl" = 2024) - (SELECT SUM("Üretim") FROM kds WHERE "Ürün" = ? AND "İl" = k."İl" AND "Yıl" = 2020) as fark FROM kds k WHERE "Ürün" = ? GROUP BY "İl" ORDER BY fark DESC LIMIT 5` },
-  { id: 6, soru: "Üretimi en çok azalan iller hangileri?", sql: `SELECT "İl", (SELECT SUM("Üretim") FROM kds WHERE "Ürün" = ? AND "İl" = k."İl" AND "Yıl" = 2024) - (SELECT SUM("Üretim") FROM kds WHERE "Ürün" = ? AND "İl" = k."İl" AND "Yıl" = 2020) as fark FROM kds k WHERE "Ürün" = ? GROUP BY "İl" ORDER BY fark ASC LIMIT 5` },
-  { id: 7, soru: "Kaç ilde üretiliyor?", sql: `SELECT COUNT(DISTINCT "İl") as il_sayisi FROM kds WHERE "Ürün" = ?` },
-  { id: 8, soru: "En verimli iller hangileri?", sql: `SELECT "İl", AVG("Verim") as ort_verim FROM kds WHERE "Ürün" = ? AND "Verim" > 0 GROUP BY "İl" ORDER BY ort_verim DESC LIMIT 5` },
-  { id: 9, soru: "Türkiye toplam üretimi ne kadar?", sql: `SELECT "Yıl", SUM("Üretim") as toplam FROM kds WHERE "Ürün" = ? GROUP BY "Yıl" ORDER BY "Yıl" DESC LIMIT 1` },
-  { id: 10, soru: "Yıllık büyüme oranı nedir?", sql: `SELECT "Yıl", SUM("Üretim") as uretim FROM kds WHERE "Ürün" = ? GROUP BY "Yıl" ORDER BY "Yıl"` }
-];
+/** ======= UTILS ======= **/
+function getSchema() {
+  return {
+    columns: ['il', 'ilce', 'urun_cesidi', 'urun_adi', 'yil', 'uretim_alani', 'uretim_miktari', 'verim'],
+    il: 'il',
+    ilce: 'ilce',
+    kategori: 'urun_cesidi',
+    urun: 'urun_adi',
+    yil: 'yil',
+    alan: 'uretim_alani',
+    uretim: 'uretim_miktari',
+    verim: 'verim'
+  };
+}
 
-/** ======= SQL EXECUTION ======= */
-function executeQuery(db, sql, params) {
-  try {
-    const stmt = db.prepare(sql);
-    stmt.bind(params);
+function isSafeSQL(sql) {
+  const s = (sql || '').trim().toLowerCase();
+  if (!s.startsWith('select')) return false;
+ 
+  const dangerous = ['drop', 'delete', 'update', 'insert', 'create', 'alter', 'exec', 'execute', '--', ';'];
+  return !dangerous.some(word => s.includes(word));
+}
+
+function formatNumber(num) {
+  return Number(num || 0).toLocaleString('tr-TR');
+}
+
+function getClientIP(req) {
+  return req.headers['x-forwarded-for'] ||
+         req.headers['x-real-ip'] ||
+         req.connection?.remoteAddress ||
+         'unknown';
+}
+
+/** ======= BİLGİ NOTU OLUŞTURMA (VERİM DÜZELTMELİ) ======= **/
+function createBilgiNotu(question, rows, sql) {
+  if (!question.toLowerCase().includes('bilgi notu')) {
+    return null;
+  }
+  
+  // SQL'den il ve ürün bilgisini çıkar
+  const ilMatch = sql.match(/["']il["']\s*=\s*['"]([^'"]+)['"]/i) || 
+                  sql.match(/il\s*=\s*['"]([^'"]+)['"]/i);
+  const urunMatch = sql.match(/LIKE\s+['"]%([^%]+)%['"]/i) || 
+                    sql.match(/urun_adi['"]\s*LIKE\s+['"]%([^%]+)%['"]/i);
+  
+  const il = ilMatch ? ilMatch[1] : 'Türkiye';
+  const urun = urunMatch ? urunMatch[1] : 'Genel';
+  
+  // Veriden değerleri al
+  const toplam = rows[0]?.toplam_uretim || rows[0]?.uretim_miktari || 0;
+  const alan = rows[0]?.toplam_alan || rows[0]?.uretim_alani || 0;
+  
+  // Verim hesapla: Üretim(ton) / Alan(dekar) * 1000 = kg/dekar
+  let verim = 0;
+  if (alan > 0 && toplam > 0) {
+    verim = Math.round((toplam / alan) * 1000); // ton/dekar'ı kg/dekar'a çevir
+  } else if (rows[0]?.verim) {
+    verim = Math.round(rows[0].verim);
+  }
+  
+  // Tarih
+  const tarih = '06.01.2025';
+  
+  // Değerlendirme
+  let degerlendirme = '';
+  if (toplam > 1000000) {
+    degerlendirme = "Türkiye'nin en önemli üretim merkezlerinden biri";
+  } else if (toplam > 100000) {
+    degerlendirme = 'önemli bir üretim merkezi';
+  } else if (toplam > 10000) {
+    degerlendirme = 'orta ölçekli üretici';
+  } else {
+    degerlendirme = 'yerel üretici konumunda';
+  }
+  
+  // Temiz metin formatı
+  const bilgiNotu = `TARIM BILGI NOTU
+========================
+
+Tarih: ${tarih}
+Il: ${il}
+Urun: ${urun.charAt(0).toUpperCase() + urun.slice(1).toLowerCase()}
+
+TEMEL GOSTERGELER:
+- Uretim: ${formatNumber(Math.round(toplam))} ton
+- Alan: ${formatNumber(Math.round(alan))} dekar
+- Verim: ${verim} kg/dekar
+
+DEGERLENDIRME:
+${il} ili ${urun} uretiminde ${degerlendirme}.
+
+VERI KAYNAGI:
+- Yil: ${DEFAULT_YEAR}
+- Kaynak: TUIK
+
+------------------------
+NeoBi Tarim Istatistikleri
+www.tarim.emomonsdijital.com`;
+
+  return bilgiNotu;
+}
+
+/** ======= GPT LAYER ======= **/
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
+async function nlToSQL(question, schema) {
+  if (!process.env.OPENAI_API_KEY) throw new Error('OpenAI API key eksik');
+ 
+  const { il, ilce, urun, yil, uretim, alan, verim, kategori } = schema;
+  
+  // Bilgi notu için özel SQL
+  if (question.toLowerCase().includes('bilgi notu')) {
+    const words = question.split(' ');
+    let ilName = '';
+    let urunName = '';
     
-    const results = [];
-    while (stmt.step()) {
-      results.push(stmt.getAsObject());
+    // İl ve ürün isimlerini bul
+    if (words.includes('Konya') || words.includes('konya')) {
+      ilName = 'Konya';
+    } else if (words.includes('Antalya') || words.includes('antalya')) {
+      ilName = 'Antalya';
+    } else if (words.includes('İzmir') || words.includes('izmir') || words.includes('İzmir')) {
+      ilName = 'İzmir';
+    } else if (words.includes('Mersin') || words.includes('mersin')) {
+      ilName = 'Mersin';
+    } else if (words.includes('Adana') || words.includes('adana')) {
+      ilName = 'Adana';
+    } else if (words.includes('Bursa') || words.includes('bursa')) {
+      ilName = 'Bursa';
     }
-    stmt.free();
     
-    return { success: true, data: results };
-  } catch (error) {
-    return { success: false, error: error.message };
+    if (words.includes('buğday') || words.includes('bugday')) {
+      urunName = 'buğday';
+    } else if (words.includes('domates')) {
+      urunName = 'domates';
+    } else if (words.includes('üzüm') || words.includes('uzum')) {
+      urunName = 'üzüm';
+    } else if (words.includes('portakal')) {
+      urunName = 'portakal';
+    } else if (words.includes('elma')) {
+      urunName = 'elma';
+    } else if (words.includes('mısır') || words.includes('misir')) {
+      urunName = 'mısır';
+    }
+    
+    if (ilName && urunName) {
+      // Verim hesaplaması için düzeltilmiş SQL
+      return `SELECT 
+        "${il}" as il, 
+        SUM("${uretim}") as toplam_uretim, 
+        SUM("${alan}") as toplam_alan,
+        CASE 
+          WHEN SUM("${alan}") > 0 THEN ROUND(CAST(SUM("${uretim}") AS FLOAT) / SUM("${alan}") * 1000)
+          ELSE 0 
+        END as verim
+      FROM ${TABLE} 
+      WHERE "${il}"='${ilName}' 
+      AND LOWER("${urun}") LIKE '%${urunName}%' 
+      AND "${yil}"=${DEFAULT_YEAR} 
+      GROUP BY "${il}"`;
+    }
+  }
+ 
+  const system = `Sen bir SQL uzmanısın. Türkiye tarım verileri için doğal dil sorgularını SQL'e çevir.
+TABLO: ${TABLE}
+KOLONLAR:
+- "${il}": İl adı (TEXT)
+- "${ilce}": İlçe adı (TEXT)
+- "${kategori}": Ürün kategorisi (Meyve/Sebze/Tahıl) (TEXT)
+- "${urun}": Ürün adı (TEXT)
+- "${yil}": Yıl (INTEGER, 2020-2024 arası)
+- "${alan}": Üretim alanı, dekar cinsinden (INTEGER)
+- "${uretim}": Üretim miktarı, ton cinsinden (INTEGER)
+- "${verim}": Verim, ton/dekar (INTEGER)
+
+ÖNEMLİ: YAZIM HATALARINI OTOMATIK DÜZELT!
+- "kaysı" → "kayısı", "anakara" → "ankara", "domates" → "domates"
+- "adanna" → "adana", "mersinn" → "mersin", "izmirr" → "izmir"
+- İl/ürün isimlerindeki typo'ları düzelt
+
+KRİTİK KURALLAR:
+1. ÜRÜN EŞLEŞME:
+   - Yazım hatalarını düzelt: "kaysı" → "kayısı" olarak işle
+   - Tekli: "üzüm" → LOWER("${urun}") LIKE '%üzüm%' OR "${urun}" LIKE '%Üzüm%'
+   - Çoklu: "sofralık üzüm çekirdekli" → Her kelimeyi ayrı kontrol:
+     LOWER("${urun}") LIKE '%sofralık%' AND LOWER("${urun}") LIKE '%üzüm%' AND LOWER("${urun}") LIKE '%çekirdekli%'
+
+2. İL/İLÇE EŞLEŞME:
+   - Yazım hatalarını düzelt: "anakara" → "ankara" olarak işle
+   - "Mersin'de" → "${il}"='Mersin'
+   - "Tarsus'ta" → "${ilce}"='Tarsus'
+   - "Türkiye'de" → İl filtresi koyma
+
+3. YIL KURALI:
+   - Yıl yok → Otomatik ${DEFAULT_YEAR} eklenecek
+   - "2023'te" → "${yil}"=2023
+
+4. AGGREGATION:
+   - SUM() kullan, "en çok" → ORDER BY DESC
+
+5. SIRALAMA SORULARI:
+   - Soru "kaçıncı" içeriyorsa tüm illerin üretim toplamını hesapla
+
+6. BİLGİ NOTU İÇİN:
+   - Hem üretim hem alan hem verim değerlerini getir
+   - GROUP BY kullan
+
+ÖRNEKLER:
+Soru: "Konya buğday bilgi notu"
+SQL: SELECT "${il}" as il, SUM("${uretim}") as toplam_uretim, SUM("${alan}") as toplam_alan FROM ${TABLE} WHERE "${il}"='Konya' AND LOWER("${urun}") LIKE '%buğday%' AND "${yil}"=${DEFAULT_YEAR} GROUP BY "${il}"
+
+Soru: "Ankara elma üretimi"
+SQL: SELECT SUM("${uretim}") AS toplam_uretim FROM ${TABLE} WHERE "${il}"='Ankara' AND (LOWER("${urun}") LIKE '%elma%' OR "${urun}" LIKE '%Elma%')
+
+ÇIKTI: Sadece SELECT sorgusu, noktalama yok.`;
+
+  try {
+    const response = await openai.chat.completions.create({
+      model: MODEL,
+      messages: [
+        { role: 'system', content: system },
+        { role: 'user', content: `Soru: "${question}"\n\nSQL:` }
+      ],
+      temperature: 0,
+      max_tokens: 200
+    });
+   
+    let sql = (response.choices[0].message.content || '')
+      .replace(/```[\s\S]*?```/g, s => s.replace(/```(sql)?/g,'').trim())
+      .trim()
+      .replace(/;+\s*$/, '');
+   
+    return sql;
+  } catch (e) {
+    console.error('OpenAI hatası:', e.message);
+    throw new Error(`GPT servisi geçici olarak kullanılamıyor: ${e.message}`);
   }
 }
 
-/** ======= AI ANALYSIS ======= */
-const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-
-async function generateAnalysis(secim, tip, sorular, sonuclar) {
-  const context = tip === 'il' 
-    ? `${secim} ili için tarımsal analiz yapıyorsun.`
-    : `${secim} ürünü için Türkiye geneli analiz yapıyorsun.`;
-
-  const dataContext = sorular.map((s, i) => {
-    const sonuc = sonuclar[i];
-    return `**${s.soru}**\nVeri: ${JSON.stringify(sonuc.data || sonuc.error)}`;
-  }).join('\n\n');
-
-  const systemPrompt = `Sen bir tarım ekonomisti ve karar destek uzmanısın. 
-${context}
-
-Aşağıdaki verilere dayanarak KARAR KARTI formatında analiz yap:
-
-${dataContext}
-
-KARAR KARTI FORMATI:
-1. **Genel Değerlendirme** (2-3 cümle özet)
-2. **Güçlü Yönler** (3 madde)
-3. **Zayıf Yönler / Riskler** (3 madde)
-4. **Trend Analizi** (Yükseliş/Düşüş/Durağan + açıklama)
-5. **Önerilen Aksiyonlar** (3-5 somut öneri)
-6. **Risk Seviyesi** (Düşük/Orta/Yüksek)
-7. **Güven Düzeyi** (%70-%95 arası, veri kalitesine göre)
-
-Yanıtını Türkçe ver. Sayısal verileri kullan, genel konuşma yapma.`;
-
-  const response = await anthropic.messages.create({
-    model: MODEL,
-    max_tokens: MAX_TOKENS,
-    messages: [{ role: 'user', content: systemPrompt }]
-  });
-
-  return response.content[0].text;
-}
-
-/** ======= HELPER: Get Lists ======= */
-async function getIller(db) {
-  const result = executeQuery(db, `SELECT DISTINCT "İl" FROM kds ORDER BY "İl"`, []);
-  return result.success ? result.data.map(r => r['İl']) : [];
-}
-
-async function getUrunler(db) {
-  const result = executeQuery(db, `SELECT DISTINCT "Ürün" FROM kds ORDER BY "Ürün"`, []);
-  return result.success ? result.data.map(r => r['Ürün']) : [];
-}
-
-/** ======= MAIN HANDLER ======= */
-export default async function handler(req, res) {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+async function generateAnswer(question, rows, sql) {
+  // Önce bilgi notu kontrolü
+  const bilgiNotu = createBilgiNotu(question, rows, sql);
+  if (bilgiNotu) {
+    return bilgiNotu;
+  }
   
+  if (!rows || rows.length === 0) {
+    return 'Bu sorguya uygun veri bulunamadı.';
+  }
+ 
+  if (question.toLowerCase().includes('kaçıncı') && rows.length === 1 && rows[0].siralama) {
+    const sira = rows[0].siralama;
+    return `${rows[0].il} ${sira}. sırada.`;
+  }
+ 
+  if (rows.length === 1) {
+    const row = rows[0];
+    const keys = Object.keys(row);
+   
+    if (keys.length === 1) {
+      const [key, value] = Object.entries(row)[0];
+     
+      if (value === null || value === undefined || value === 0) {
+        return 'Bu sorguya uygun veri bulunamadı.';
+      }
+     
+      if (key.includes('alan')) {
+        return `${formatNumber(value)} dekar`;
+      } else if (key.includes('verim')) {
+        return `${formatNumber(value)} ton/dekar`;
+      } else if (key.includes('uretim') || key.includes('toplam')) {
+        return `${formatNumber(value)} ton`;
+      }
+      return formatNumber(value);
+    }
+  }
+ 
+  if (process.env.OPENAI_API_KEY) {
+    try {
+      const response = await openai.chat.completions.create({
+        model: MODEL,
+        messages: [{
+          role: 'system',
+          content: 'Tarım verileri uzmanısın. Kısa Türkçe cevap ver. Sayıları binlik ayraçla yaz.'
+        }, {
+          role: 'user',
+          content: `Soru: ${question}\nVeri: ${JSON.stringify(rows.slice(0, 5))}`
+        }],
+        temperature: 0,
+        max_tokens: 100
+      });
+     
+      return response.choices[0].message.content?.trim() || 'Cevap oluşturulamadı.';
+    } catch (e) {
+      console.error('GPT cevap hatası:', e);
+      return `${rows.length} sonuç bulundu: ${JSON.stringify(rows[0])}`;
+    }
+  }
+ 
+  return `${rows.length} sonuç bulundu.`;
+}
+
+/** ======= MAIN HANDLER ======= **/
+export default async function handler(req, res) {
+  const startTime = Date.now();
+  const clientIP = getClientIP(req);
+ 
+  // CORS
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+ 
   if (req.method === 'OPTIONS') {
     return res.status(200).end();
   }
-
-  const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown';
-  if (!checkRateLimit(ip)) {
-    return res.status(429).json({ error: 'Çok fazla istek. Lütfen 1 dakika bekleyin.' });
+ 
+  if (req.method !== 'POST') {
+    return res.status(405).json({ error: 'Sadece POST metodu desteklenir' });
   }
-
+ 
+  if (!checkRateLimit(clientIP)) {
+    return res.status(429).json({
+      error: 'Çok fazla istek',
+      detail: 'Dakikada maksimum 15 soru sorabilirsiniz. Lütfen bekleyin.'
+    });
+  }
+ 
   try {
-    const db = await getDB();
-    
-    // GET: Liste endpoint'leri
-    if (req.method === 'GET') {
-      const { action } = req.query;
-      
-      if (action === 'iller') {
-        const iller = await getIller(db);
-        return res.status(200).json({ success: true, data: iller });
-      }
-      
-      if (action === 'urunler') {
-        const urunler = await getUrunler(db);
-        return res.status(200).json({ success: true, data: urunler });
-      }
-      
-      return res.status(400).json({ error: 'Geçersiz action parametresi' });
+    const { question } = req.body || {};
+   
+    if (!question?.trim()) {
+      return res.status(400).json({ error: 'Soru parametresi gerekli' });
     }
-
-    // POST: Analiz endpoint'i
-    if (req.method === 'POST') {
-      const { tip, secim } = req.body;
-      
-      if (!tip || !secim) {
-        return res.status(400).json({ error: 'tip ve secim parametreleri gerekli' });
-      }
-      
-      if (!['il', 'urun'].includes(tip)) {
-        return res.status(400).json({ error: 'tip "il" veya "urun" olmalı' });
-      }
-
-      const sorular = tip === 'il' ? IL_SORULARI : URUN_SORULARI;
-      
-      const sonuclar = [];
-      for (const s of sorular) {
-        const paramCount = (s.sql.match(/\?/g) || []).length;
-        const params = Array(paramCount).fill(secim);
-        
-        const result = executeQuery(db, s.sql, params);
-        sonuclar.push(result);
-      }
-
-      if (!process.env.ANTHROPIC_API_KEY) {
-        return res.status(500).json({ error: 'ANTHROPIC_API_KEY tanımlı değil' });
-      }
-
-      const analiz = await generateAnalysis(secim, tip, sorular, sonuclar);
-
+   
+    const cached = getCachedResponse(question);
+    if (cached) {
+      console.log(`[CACHE HIT] ${question}`);
       return res.status(200).json({
-        success: true,
-        secim,
-        tip,
-        analiz,
-        veriler: sorular.map((s, i) => ({
-          soru: s.soru,
-          sonuc: sonuclar[i]
-        }))
+        ...cached,
+        cached: true,
+        processingTime: Date.now() - startTime
       });
     }
-
-    return res.status(405).json({ error: 'Method not allowed' });
-
+   
+    console.log(`[${new Date().toISOString()}] IP: ${clientIP}, Soru: ${question}`);
+   
+    const SQL = await initSqlJs({
+      locateFile: (file) => path.join(process.cwd(), 'node_modules/sql.js/dist', file)
+    });
+   
+    const dbPath = path.join(process.cwd(), 'public', 'tarimdb.sqlite');
+    if (!fs.existsSync(dbPath)) {
+      throw new Error('Veritabanı dosyası bulunamadı');
+    }
+   
+    const dbBuffer = fs.readFileSync(dbPath);
+    const db = new SQL.Database(dbBuffer);
+   
+    let sql;
+    try {
+      sql = await nlToSQL(question, getSchema());
+      if (DEBUG_MODE) console.log('SQL:', sql);
+    } catch (e) {
+      return res.status(400).json({
+        error: 'Soru anlayılamadı',
+        detail: e.message
+      });
+    }
+   
+    if (!isSafeSQL(sql)) {
+      return res.status(400).json({ error: 'Güvenli olmayan sorgu' });
+    }
+   
+    let rows = [];
+    try {
+      const stmt = db.prepare(sql);
+      while (stmt.step()) {
+        rows.push(stmt.getAsObject());
+      }
+      stmt.free();
+      console.log(`Sonuç: ${rows.length} satır`);
+    } catch (e) {
+      console.error('SQL hatası:', e);
+      return res.status(400).json({
+        error: 'Sorgu çalıştırılamadı',
+        detail: 'Veritabanı sorgu hatası'
+      });
+    } finally {
+      db.close();
+    }
+   
+    const answer = await generateAnswer(question, rows, sql);
+   
+    // WhatsApp linki (bilgi notu için)
+    let whatsappLink = null;
+    if (question.toLowerCase().includes('bilgi notu')) {
+      const encodedText = encodeURIComponent(answer);
+      whatsappLink = `https://wa.me/?text=${encodedText}`;
+    }
+   
+    const response = {
+      success: true,
+      answer: answer,
+      data: rows.slice(0, 10),
+      totalRows: rows.length,
+      whatsappLink: whatsappLink,
+      isBilgiNotu: question.toLowerCase().includes('bilgi notu'),
+      processingTime: Date.now() - startTime,
+      debug: DEBUG_MODE ? { sql, sampleRows: rows.slice(0, 2) } : null
+    };
+   
+    setCachedResponse(question, response);
+    
+    res.status(200).json(response);
+   
   } catch (error) {
-    console.error('API Hatası:', error);
-    return res.status(500).json({ error: error.message });
+    console.error('Genel hata:', error.message);
+    res.status(500).json({
+      error: 'Sunucu hatası',
+      detail: DEBUG_MODE ? error.message : 'Geçici bir sorun oluştu',
+      processingTime: Date.now() - startTime
+    });
   }
 }
