@@ -3,6 +3,7 @@
   "type": "module",
   "dependencies": {
     "openai": "^4.57.0",
-    "sql.js": "^1.9.0"
+    "sql.js": "^1.9.0",
+    "@anthropic-ai/sdk": "^0.52.0"
   }
 }
