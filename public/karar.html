@@ -1,0 +1,583 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>NeoBi Karar Destek Sistemi</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      background: linear-gradient(135deg, #1a5f2a 0%, #2d8f4a 100%);
+      min-height: 100vh;
+      padding: 20px;
+    }
+
+    .container {
+      max-width: 900px;
+      margin: 0 auto;
+    }
+
+    .header {
+      text-align: center;
+      color: white;
+      margin-bottom: 30px;
+    }
+
+    .header h1 {
+      font-size: 2rem;
+      margin-bottom: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+    }
+
+    .header p {
+      opacity: 0.9;
+      font-size: 1rem;
+    }
+
+    .card {
+      background: white;
+      border-radius: 16px;
+      padding: 24px;
+      margin-bottom: 20px;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.15);
+    }
+
+    .card-title {
+      font-size: 1.1rem;
+      font-weight: 600;
+      color: #1a5f2a;
+      margin-bottom: 16px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .tabs {
+      display: flex;
+      gap: 10px;
+      margin-bottom: 20px;
+    }
+
+    .tab {
+      flex: 1;
+      padding: 12px 20px;
+      border: 2px solid #e0e0e0;
+      background: white;
+      border-radius: 10px;
+      cursor: pointer;
+      font-size: 1rem;
+      font-weight: 500;
+      transition: all 0.2s;
+      text-align: center;
+    }
+
+    .tab:hover {
+      border-color: #2d8f4a;
+    }
+
+    .tab.active {
+      background: #2d8f4a;
+      color: white;
+      border-color: #2d8f4a;
+    }
+
+    .form-group {
+      margin-bottom: 20px;
+    }
+
+    .form-group label {
+      display: block;
+      margin-bottom: 8px;
+      font-weight: 500;
+      color: #333;
+    }
+
+    .form-group select {
+      width: 100%;
+      padding: 14px 16px;
+      border: 2px solid #e0e0e0;
+      border-radius: 10px;
+      font-size: 1rem;
+      background: white;
+      cursor: pointer;
+      transition: border-color 0.2s;
+    }
+
+    .form-group select:focus {
+      outline: none;
+      border-color: #2d8f4a;
+    }
+
+    .btn {
+      width: 100%;
+      padding: 16px;
+      background: linear-gradient(135deg, #1a5f2a 0%, #2d8f4a 100%);
+      color: white;
+      border: none;
+      border-radius: 10px;
+      font-size: 1.1rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: transform 0.2s, box-shadow 0.2s;
+    }
+
+    .btn:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 4px 15px rgba(45, 143, 74, 0.4);
+    }
+
+    .btn:disabled {
+      background: #ccc;
+      cursor: not-allowed;
+      transform: none;
+      box-shadow: none;
+    }
+
+    .loading {
+      display: none;
+      text-align: center;
+      padding: 40px;
+    }
+
+    .loading.active {
+      display: block;
+    }
+
+    .spinner {
+      width: 50px;
+      height: 50px;
+      border: 4px solid #e0e0e0;
+      border-top-color: #2d8f4a;
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+      margin: 0 auto 16px;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    .loading p {
+      color: #666;
+      font-size: 1rem;
+    }
+
+    .result {
+      display: none;
+    }
+
+    .result.active {
+      display: block;
+    }
+
+    .result-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 20px;
+      padding-bottom: 16px;
+      border-bottom: 2px solid #e8f5e9;
+    }
+
+    .result-title {
+      font-size: 1.3rem;
+      font-weight: 700;
+      color: #1a5f2a;
+    }
+
+    .result-badge {
+      background: #e8f5e9;
+      color: #1a5f2a;
+      padding: 6px 14px;
+      border-radius: 20px;
+      font-size: 0.85rem;
+      font-weight: 600;
+    }
+
+    .analysis-content {
+      line-height: 1.7;
+      color: #333;
+    }
+
+    .analysis-content h1, 
+    .analysis-content h2 {
+      color: #1a5f2a;
+      margin: 20px 0 12px;
+      font-size: 1.2rem;
+    }
+
+    .analysis-content h2 {
+      font-size: 1.1rem;
+      border-left: 4px solid #2d8f4a;
+      padding-left: 12px;
+    }
+
+    .analysis-content p {
+      margin-bottom: 12px;
+    }
+
+    .analysis-content ul, 
+    .analysis-content ol {
+      margin: 12px 0;
+      padding-left: 24px;
+    }
+
+    .analysis-content li {
+      margin-bottom: 8px;
+    }
+
+    .analysis-content strong {
+      color: #1a5f2a;
+    }
+
+    .data-section {
+      margin-top: 30px;
+      padding-top: 20px;
+      border-top: 2px solid #e8f5e9;
+    }
+
+    .data-title {
+      font-size: 1rem;
+      font-weight: 600;
+      color: #1a5f2a;
+      margin-bottom: 16px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .data-title:hover {
+      opacity: 0.8;
+    }
+
+    .data-grid {
+      display: none;
+      gap: 12px;
+    }
+
+    .data-grid.active {
+      display: grid;
+    }
+
+    .data-item {
+      background: #f8faf8;
+      padding: 14px;
+      border-radius: 10px;
+      border-left: 3px solid #2d8f4a;
+    }
+
+    .data-item-title {
+      font-weight: 600;
+      color: #333;
+      margin-bottom: 6px;
+      font-size: 0.9rem;
+    }
+
+    .data-item-content {
+      font-size: 0.85rem;
+      color: #666;
+    }
+
+    .btn-secondary {
+      margin-top: 20px;
+      background: #f5f5f5;
+      color: #333;
+      border: 2px solid #e0e0e0;
+    }
+
+    .btn-secondary:hover {
+      background: #e8e8e8;
+      box-shadow: none;
+      transform: none;
+    }
+
+    .footer {
+      text-align: center;
+      color: rgba(255,255,255,0.8);
+      margin-top: 30px;
+      font-size: 0.85rem;
+    }
+
+    .footer a {
+      color: white;
+      text-decoration: underline;
+    }
+
+    .error {
+      background: #ffebee;
+      color: #c62828;
+      padding: 16px;
+      border-radius: 10px;
+      margin-bottom: 20px;
+      display: none;
+    }
+
+    .error.active {
+      display: block;
+    }
+
+    @media (max-width: 600px) {
+      .header h1 {
+        font-size: 1.5rem;
+      }
+
+      .tabs {
+        flex-direction: column;
+      }
+
+      .card {
+        padding: 16px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>🌾 NeoBi Karar Destek Sistemi</h1>
+      <p>Yapay zeka destekli tarımsal analiz ve karar kartları</p>
+    </div>
+
+    <div class="card">
+      <div class="card-title">📊 Analiz Türü Seçin</div>
+      
+      <div class="tabs">
+        <button class="tab active" data-tip="il" onclick="selectTab('il')">
+          🏙️ İl Bazlı Analiz
+        </button>
+        <button class="tab" data-tip="urun" onclick="selectTab('urun')">
+          🌽 Ürün Bazlı Analiz
+        </button>
+      </div>
+
+      <div class="form-group" id="ilGroup">
+        <label for="ilSelect">İl Seçin</label>
+        <select id="ilSelect">
+          <option value="">Yükleniyor...</option>
+        </select>
+      </div>
+
+      <div class="form-group" id="urunGroup" style="display: none;">
+        <label for="urunSelect">Ürün Seçin</label>
+        <select id="urunSelect">
+          <option value="">Yükleniyor...</option>
+        </select>
+      </div>
+
+      <button class="btn" id="analyzeBtn" onclick="analyze()">
+        🔍 Analiz Et
+      </button>
+    </div>
+
+    <div class="error" id="errorBox"></div>
+
+    <div class="card loading" id="loadingBox">
+      <div class="spinner"></div>
+      <p>Yapay zeka analiz üretiyor...</p>
+      <p style="font-size: 0.85rem; color: #999; margin-top: 8px;">Bu işlem 10-30 saniye sürebilir</p>
+    </div>
+
+    <div class="card result" id="resultBox">
+      <div class="result-header">
+        <div class="result-title" id="resultTitle">Analiz Sonucu</div>
+        <div class="result-badge" id="resultBadge">İl Analizi</div>
+      </div>
+
+      <div class="analysis-content" id="analysisContent"></div>
+
+      <div class="data-section">
+        <div class="data-title" onclick="toggleData()">
+          📋 Ham Verileri Göster ▼
+        </div>
+        <div class="data-grid" id="dataGrid"></div>
+      </div>
+
+      <button class="btn btn-secondary" onclick="resetForm()">
+        ← Yeni Analiz Yap
+      </button>
+    </div>
+
+    <div class="footer">
+      <p>Veri Kaynağı: TÜİK (2014-2024) • <a href="index.html">Chatbot'a Dön</a></p>
+      <p style="margin-top: 8px;">⚠️ Bu analizler yapay zeka tarafından üretilmektedir. Karar vermeden önce verileri doğrulayın.</p>
+    </div>
+  </div>
+
+  <script>
+    const API_URL = '/api/apichat2';
+    let currentTip = 'il';
+    let iller = [];
+    let urunler = [];
+
+    // Sayfa yüklendiğinde listeleri getir
+    document.addEventListener('DOMContentLoaded', () => {
+      loadIller();
+      loadUrunler();
+    });
+
+    async function loadIller() {
+      try {
+        const res = await fetch(`${API_URL}?action=iller`);
+        const data = await res.json();
+        if (data.success) {
+          iller = data.data;
+          const select = document.getElementById('ilSelect');
+          select.innerHTML = '<option value="">-- İl Seçin --</option>' + 
+            iller.map(il => `<option value="${il}">${il}</option>`).join('');
+        }
+      } catch (e) {
+        console.error('İller yüklenemedi:', e);
+      }
+    }
+
+    async function loadUrunler() {
+      try {
+        const res = await fetch(`${API_URL}?action=urunler`);
+        const data = await res.json();
+        if (data.success) {
+          urunler = data.data;
+          const select = document.getElementById('urunSelect');
+          select.innerHTML = '<option value="">-- Ürün Seçin --</option>' + 
+            urunler.map(u => `<option value="${u}">${u}</option>`).join('');
+        }
+      } catch (e) {
+        console.error('Ürünler yüklenemedi:', e);
+      }
+    }
+
+    function selectTab(tip) {
+      currentTip = tip;
+      
+      // Tab stilini güncelle
+      document.querySelectorAll('.tab').forEach(tab => {
+        tab.classList.toggle('active', tab.dataset.tip === tip);
+      });
+
+      // Form alanlarını göster/gizle
+      document.getElementById('ilGroup').style.display = tip === 'il' ? 'block' : 'none';
+      document.getElementById('urunGroup').style.display = tip === 'urun' ? 'block' : 'none';
+    }
+
+    async function analyze() {
+      const secim = currentTip === 'il' 
+        ? document.getElementById('ilSelect').value 
+        : document.getElementById('urunSelect').value;
+
+      if (!secim) {
+        showError(currentTip === 'il' ? 'Lütfen bir il seçin' : 'Lütfen bir ürün seçin');
+        return;
+      }
+
+      // UI güncelle
+      hideError();
+      document.getElementById('resultBox').classList.remove('active');
+      document.getElementById('loadingBox').classList.add('active');
+      document.getElementById('analyzeBtn').disabled = true;
+
+      try {
+        const res = await fetch(API_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ tip: currentTip, secim: secim })
+        });
+
+        const data = await res.json();
+
+        if (data.success) {
+          showResult(data);
+        } else {
+          showError(data.error || 'Analiz oluşturulamadı');
+        }
+      } catch (e) {
+        showError('Bağlantı hatası: ' + e.message);
+      } finally {
+        document.getElementById('loadingBox').classList.remove('active');
+        document.getElementById('analyzeBtn').disabled = false;
+      }
+    }
+
+    function showResult(data) {
+      // Başlık
+      document.getElementById('resultTitle').textContent = 
+        `${data.secim} ${data.tip === 'il' ? 'İli' : 'Ürünü'} Analizi`;
+      document.getElementById('resultBadge').textContent = 
+        data.tip === 'il' ? 'İl Analizi' : 'Ürün Analizi';
+
+      // Analiz içeriği - Markdown'ı HTML'e çevir
+      const analysisHtml = markdownToHtml(data.analiz);
+      document.getElementById('analysisContent').innerHTML = analysisHtml;
+
+      // Ham veriler
+      const dataGrid = document.getElementById('dataGrid');
+      dataGrid.innerHTML = data.veriler.map(v => `
+        <div class="data-item">
+          <div class="data-item-title">${v.soru}</div>
+          <div class="data-item-content">${formatData(v.sonuc)}</div>
+        </div>
+      `).join('');
+
+      // Göster
+      document.getElementById('resultBox').classList.add('active');
+    }
+
+    function markdownToHtml(md) {
+      return md
+        .replace(/^### (.*$)/gim, '<h3>$1</h3>')
+        .replace(/^## (.*$)/gim, '<h2>$1</h2>')
+        .replace(/^# (.*$)/gim, '<h1>$1</h1>')
+        .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+        .replace(/\*(.*?)\*/g, '<em>$1</em>')
+        .replace(/^\- (.*$)/gim, '<li>$1</li>')
+        .replace(/^\d+\. (.*$)/gim, '<li>$1</li>')
+        .replace(/\n\n/g, '</p><p>')
+        .replace(/\n/g, '<br>')
+        .replace(/^/, '<p>')
+        .replace(/$/, '</p>');
+    }
+
+    function formatData(sonuc) {
+      if (!sonuc.success) return `Hata: ${sonuc.error}`;
+      if (!sonuc.data || sonuc.data.length === 0) return 'Veri yok';
+      
+      // İlk 3 satırı göster
+      return sonuc.data.slice(0, 3).map(row => {
+        return Object.entries(row)
+          .map(([k, v]) => `${k}: ${typeof v === 'number' ? v.toLocaleString('tr-TR') : v}`)
+          .join(', ');
+      }).join(' | ');
+    }
+
+    function toggleData() {
+      const dataGrid = document.getElementById('dataGrid');
+      dataGrid.classList.toggle('active');
+    }
+
+    function showError(message) {
+      const errorBox = document.getElementById('errorBox');
+      errorBox.textContent = message;
+      errorBox.classList.add('active');
+    }
+
+    function hideError() {
+      document.getElementById('errorBox').classList.remove('active');
+    }
+
+    function resetForm() {
+      document.getElementById('resultBox').classList.remove('active');
+      document.getElementById('ilSelect').value = '';
+      document.getElementById('urunSelect').value = '';
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+  </script>
+</body>
+</html>
