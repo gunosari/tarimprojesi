@@ -1,4 +1,4 @@
-// api/chat2.js — NeoBi Karar Destek Sistemi API (Claude API)
+// api/apichat2.js — NeoBi Karar Destek Sistemi API (Claude API)
 export const config = { runtime: 'nodejs', maxDuration: 60 };
 
 import fs from 'fs';
@@ -14,8 +14,8 @@ const MAX_TOKENS = 4096;
 
 /** ======= RATE LIMITING ======= */
 const rateLimitMap = new Map();
-const RATE_LIMIT_WINDOW = 60000; // 1 dakika
-const RATE_LIMIT_MAX = 10; // 10 request/dakika/IP
+const RATE_LIMIT_WINDOW = 60000;
+const RATE_LIMIT_MAX = 10;
 
 function checkRateLimit(ip) {
   const now = Date.now();
@@ -33,11 +33,30 @@ function checkRateLimit(ip) {
 
 /** ======= DATABASE ======= */
 let dbInstance = null;
+let sqlPromise = null;
+
+async function getSQL() {
+  if (sqlPromise) return sqlPromise;
+  
+  sqlPromise = (async () => {
+    // WASM dosyasını CDN'den fetch et
+    const wasmResponse = await fetch('https://sql.js.org/dist/sql-wasm.wasm');
+    const wasmBinary = await wasmResponse.arrayBuffer();
+    
+    const SQL = await initSqlJs({
+      wasmBinary: wasmBinary
+    });
+    
+    return SQL;
+  })();
+  
+  return sqlPromise;
+}
 
 async function getDB() {
   if (dbInstance) return dbInstance;
   
-  const SQL = await initSqlJs();
+  const SQL = await getSQL();
   const dbPath = path.join(process.cwd(), 'public', DB_FILE);
   const buffer = fs.readFileSync(dbPath);
   dbInstance = new SQL.Database(buffer);
@@ -46,7 +65,6 @@ async function getDB() {
 }
 
 /** ======= PREDEFINED QUERIES ======= */
-// İl bazlı analiz için 10 soru
 const IL_SORULARI = [
   { id: 1, soru: "Bu ilde en çok üretilen 5 ürün nedir?", sql: `SELECT "Ürün", SUM("Üretim") as toplam FROM kds WHERE "İl" = ? GROUP BY "Ürün" ORDER BY toplam DESC LIMIT 5` },
   { id: 2, soru: "Son 3 yılda üretim trendi nasıl?", sql: `SELECT "Yıl", SUM("Üretim") as toplam FROM kds WHERE "İl" = ? AND "Yıl" >= 2022 GROUP BY "Yıl" ORDER BY "Yıl"` },
@@ -57,10 +75,9 @@ const IL_SORULARI = [
   { id: 7, soru: "Toplam ekim alanı ne kadar?", sql: `SELECT "Yıl", SUM("Alan") as toplam_alan FROM kds WHERE "İl" = ? GROUP BY "Yıl" ORDER BY "Yıl" DESC LIMIT 5` },
   { id: 8, soru: "Ürün çeşitliliği ne durumda?", sql: `SELECT COUNT(DISTINCT "Ürün") as urun_sayisi, COUNT(DISTINCT "Ürün Grubu") as grup_sayisi FROM kds WHERE "İl" = ?` },
   { id: 9, soru: "En verimli ürünler hangileri?", sql: `SELECT "Ürün", AVG("Verim") as ort_verim FROM kds WHERE "İl" = ? AND "Verim" > 0 GROUP BY "Ürün" ORDER BY ort_verim DESC LIMIT 5` },
-  { id: 10, soru: "Yıllık üretim değişim oranı nedir?", sql: `SELECT "Yıl", SUM("Üretim") as uretim, LAG(SUM("Üretim")) OVER (ORDER BY "Yıl") as onceki FROM kds WHERE "İl" = ? GROUP BY "Yıl" ORDER BY "Yıl"` }
+  { id: 10, soru: "Yıllık üretim değişim oranı nedir?", sql: `SELECT "Yıl", SUM("Üretim") as uretim FROM kds WHERE "İl" = ? GROUP BY "Yıl" ORDER BY "Yıl"` }
 ];
 
-// Ürün bazlı analiz için 10 soru
 const URUN_SORULARI = [
   { id: 1, soru: "Bu ürünü en çok üreten 5 il hangisi?", sql: `SELECT "İl", SUM("Üretim") as toplam FROM kds WHERE "Ürün" = ? GROUP BY "İl" ORDER BY toplam DESC LIMIT 5` },
   { id: 2, soru: "Son 5 yılda Türkiye geneli üretim trendi nasıl?", sql: `SELECT "Yıl", SUM("Üretim") as toplam FROM kds WHERE "Ürün" = ? AND "Yıl" >= 2020 GROUP BY "Yıl" ORDER BY "Yıl"` },
@@ -96,7 +113,6 @@ function executeQuery(db, sql, params) {
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 async function generateAnalysis(secim, tip, sorular, sonuclar) {
-  // tip: "il" veya "urun"
   const context = tip === 'il' 
     ? `${secim} ili için tarımsal analiz yapıyorsun.`
     : `${secim} ürünü için Türkiye geneli analiz yapıyorsun.`;
@@ -146,7 +162,6 @@ async function getUrunler(db) {
 
 /** ======= MAIN HANDLER ======= */
 export default async function handler(req, res) {
-  // CORS headers
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
@@ -155,7 +170,6 @@ export default async function handler(req, res) {
     return res.status(200).end();
   }
 
-  // Rate limiting
   const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown';
   if (!checkRateLimit(ip)) {
     return res.status(429).json({ error: 'Çok fazla istek. Lütfen 1 dakika bekleyin.' });
@@ -193,13 +207,10 @@ export default async function handler(req, res) {
         return res.status(400).json({ error: 'tip "il" veya "urun" olmalı' });
       }
 
-      // Sorguları seç
       const sorular = tip === 'il' ? IL_SORULARI : URUN_SORULARI;
       
-      // Tüm sorguları çalıştır
       const sonuclar = [];
       for (const s of sorular) {
-        // Parametreleri hazırla (bazı sorgularda 3 parametre var)
         const paramCount = (s.sql.match(/\?/g) || []).length;
         const params = Array(paramCount).fill(secim);
         
@@ -207,7 +218,6 @@ export default async function handler(req, res) {
         sonuclar.push(result);
       }
 
-      // AI analizi oluştur
       if (!process.env.ANTHROPIC_API_KEY) {
         return res.status(500).json({ error: 'ANTHROPIC_API_KEY tanımlı değil' });
       }
