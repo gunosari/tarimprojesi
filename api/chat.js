@@ -33,12 +33,11 @@ function checkRateLimit(ip) {
 
 /** ======= DATABASE ======= */
 let dbInstance = null;
-
 async function getDB() {
   if (dbInstance) return dbInstance;
   
   const SQL = await initSqlJs({
-    locateFile: (file) => path.join(process.cwd(), 'node_modules/sql.js/dist', file)
+    locateFile: (file) => `https://sql.js.org/dist/${file}`
   });
   const dbPath = path.join(process.cwd(), 'public', DB_FILE);
   const buffer = fs.readFileSync(dbPath);
