@@ -39,7 +39,6 @@ async function getSQL() {
   if (sqlPromise) return sqlPromise;
   
   sqlPromise = (async () => {
-    // WASM dosyasını CDN'den fetch et
     const wasmResponse = await fetch('https://sql.js.org/dist/sql-wasm.wasm');
     const wasmBinary = await wasmResponse.arrayBuffer();
     
@@ -181,6 +180,35 @@ export default async function handler(req, res) {
     // GET: Liste endpoint'leri
     if (req.method === 'GET') {
       const { action } = req.query;
+      
+      // DEBUG: Veritabanı yapısını test et
+      if (action === 'test') {
+        try {
+          const tables = db.exec('SELECT name FROM sqlite_master WHERE type="table"');
+          const tableList = tables.length > 0 ? tables[0].values.flat() : [];
+          
+          let columns = [];
+          let sampleData = [];
+          
+          if (tableList.length > 0) {
+            const tableName = tableList[0];
+            const colInfo = db.exec(`PRAGMA table_info("${tableName}")`);
+            columns = colInfo.length > 0 ? colInfo[0].values.map(c => c[1]) : [];
+            
+            const sample = db.exec(`SELECT * FROM "${tableName}" LIMIT 3`);
+            sampleData = sample.length > 0 ? sample[0].values : [];
+          }
+          
+          return res.status(200).json({ 
+            success: true, 
+            tables: tableList,
+            columns: columns,
+            sampleData: sampleData
+          });
+        } catch (e) {
+          return res.status(200).json({ success: false, error: e.message });
+        }
+      }
       
       if (action === 'iller') {
         const iller = await getIller(db);
