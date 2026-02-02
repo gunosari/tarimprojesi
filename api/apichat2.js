@@ -9,7 +9,7 @@ import Anthropic from '@anthropic-ai/sdk';
 /** ======= CONFIG ======= */
 const DB_FILE = 'kds_vt.db';
 const MODEL = 'claude-sonnet-4-20250514';
-const MAX_TOKENS = 6000;
+const MAX_TOKENS = 7000;
 
 /** ======= RATE LIMITING ======= */
 const rateLimitMap = new Map();
@@ -313,9 +313,20 @@ ${tip === 'il' ? `Her ürün grubu (Meyve, Sebze, Tahıl) için şu formatta bir
    - Düşük / Orta / Yüksek
    - Bir satır gerekçe yaz. Örnek: "Ekim alanı daralması + ana ürünlerde üretim düşüşü → ORTA"
 
-7. **Güven Düzeyi** (%70-%95 arası, veri kalitesine göre)
+7. **Karar Sinyalleri**
+   Yönetici için 3 satırlık özet. Her ürün grubu veya ana tema için tek satır sinyal ver:
+   - 🟢 [güçlü alan]: koru ve güçlendir
+   - 🟡 [orta alan]: seçici destek / izle
+   - 🔴 [zayıf alan]: genişleme hedefi koyma / yapısal müdahale gerekli
 
-8. **Senaryo Analizi**
+8. **Güven Düzeyi**
+   - %70-%95 arası yüzde ver
+   - Ardından 2-3 maddeyle gerekçelendir:
+     * Veri kalitesi (tam mı, eksik mi)
+     * Seri uzunluğu (kaç yıllık veri)
+     * Modele dahil edilmeyen değişkenler (iklim, maliyet vb. → belirsizlik payı)
+
+9. **Senaryo Analizi**
 
    Önce TREND PROJEKSİYONU yap:
    - Verideki son 5 yılın ekim alanı ve üretim değişim hızını hesapla (yıllık ortalama % değişim)
@@ -342,6 +353,14 @@ ${tip === 'il' ? `Her ürün grubu (Meyve, Sebze, Tahıl) için şu formatta bir
    - Senaryolar mevcut veriden türetilmeli, dış varsayım eklenmemeli.
    - Her senaryoda somut üretim/alan rakamı ver (yaklaşık değer olarak).
    - Bu bölüm tahmin değil, "veri devam ederse ne olur" çerçevesidir.
+
+10. **Analiz Sınırları**
+   Şu kutuyu kısa ve net yaz:
+   "Bu karar kartı;
+   - Ürün bazında kesin üretim tahmini yapmaz
+   - Çiftçi bazlı gelir veya kârlılık hesaplaması içermez
+   - İklim senaryolarını modellemez
+   Analiz; TÜİK verileri üzerinden geçmiş ${maxYil - 4}–${maxYil} yılları gerçekleşmiş üretim verileri ve eğilimlere dayalı olup yön gösterici niteliktedir."
 
 ÖNEMLİ:
 - Yanıtını Türkçe ver
