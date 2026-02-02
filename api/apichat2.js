@@ -8,7 +8,6 @@ import Anthropic from '@anthropic-ai/sdk';
 
 /** ======= CONFIG ======= */
 const DB_FILE = 'kds_vt.db';
-const TABLE = 'kds';
 const MODEL = 'claude-sonnet-4-20250514';
 const MAX_TOKENS = 4096;
 
@@ -21,11 +20,7 @@ function checkRateLimit(ip) {
   const now = Date.now();
   const requests = rateLimitMap.get(ip) || [];
   const recentRequests = requests.filter(time => now - time < RATE_LIMIT_WINDOW);
-  
-  if (recentRequests.length >= RATE_LIMIT_MAX) {
-    return false;
-  }
-  
+  if (recentRequests.length >= RATE_LIMIT_MAX) return false;
   recentRequests.push(now);
   rateLimitMap.set(ip, recentRequests);
   return true;
@@ -37,84 +32,202 @@ let sqlPromise = null;
 
 async function getSQL() {
   if (sqlPromise) return sqlPromise;
-  
   sqlPromise = (async () => {
     const wasmResponse = await fetch('https://sql.js.org/dist/sql-wasm.wasm');
     const wasmBinary = await wasmResponse.arrayBuffer();
-    
-    const SQL = await initSqlJs({
-      wasmBinary: wasmBinary
-    });
-    
-    return SQL;
+    return await initSqlJs({ wasmBinary });
   })();
-  
   return sqlPromise;
 }
 
 async function getDB() {
   if (dbInstance) return dbInstance;
-  
   const SQL = await getSQL();
   const dbPath = path.join(process.cwd(), 'public', DB_FILE);
   const buffer = fs.readFileSync(dbPath);
   dbInstance = new SQL.Database(buffer);
-  
   return dbInstance;
 }
-
-/** ======= PREDEFINED QUERIES ======= */
-const IL_SORULARI = [
-  { id: 1, soru: "Bu ilde en çok üretilen 5 ürün nedir?", sql: `SELECT "Ürün", SUM("Üretim") as toplam FROM kds WHERE "İl" = ? GROUP BY "Ürün" ORDER BY toplam DESC LIMIT 5` },
-  { id: 2, soru: "Son 3 yılda üretim trendi nasıl?", sql: `SELECT "Yıl", SUM("Üretim") as toplam FROM kds WHERE "İl" = ? AND "Yıl" >= 2022 GROUP BY "Yıl" ORDER BY "Yıl"` },
-  { id: 3, soru: "Verim ortalaması Türkiye ortalamasının üstünde mi?", sql: `SELECT "Ürün Grubu", AVG("Verim") as il_verim, (SELECT AVG("Verim") FROM kds WHERE "Ürün Grubu" = k."Ürün Grubu") as tr_verim FROM kds k WHERE "İl" = ? GROUP BY "Ürün Grubu"` },
-  { id: 4, soru: "Hangi ürün grubunda en güçlü?", sql: `SELECT "Ürün Grubu", SUM("Üretim") as toplam, SUM("Alan") as alan FROM kds WHERE "İl" = ? GROUP BY "Ürün Grubu" ORDER BY toplam DESC LIMIT 1` },
-  { id: 5, soru: "Üretimi en çok artan ürün hangisi?", sql: `SELECT "Ürün", (SELECT SUM("Üretim") FROM kds WHERE "İl" = ? AND "Ürün" = k."Ürün" AND "Yıl" = 2024) - (SELECT SUM("Üretim") FROM kds WHERE "İl" = ? AND "Ürün" = k."Ürün" AND "Yıl" = 2020) as fark FROM kds k WHERE "İl" = ? GROUP BY "Ürün" ORDER BY fark DESC LIMIT 3` },
-  { id: 6, soru: "Üretimi en çok azalan ürün hangisi?", sql: `SELECT "Ürün", (SELECT SUM("Üretim") FROM kds WHERE "İl" = ? AND "Ürün" = k."Ürün" AND "Yıl" = 2024) - (SELECT SUM("Üretim") FROM kds WHERE "İl" = ? AND "Ürün" = k."Ürün" AND "Yıl" = 2020) as fark FROM kds k WHERE "İl" = ? GROUP BY "Ürün" ORDER BY fark ASC LIMIT 3` },
-  { id: 7, soru: "Toplam ekim alanı ne kadar?", sql: `SELECT "Yıl", SUM("Alan") as toplam_alan FROM kds WHERE "İl" = ? GROUP BY "Yıl" ORDER BY "Yıl" DESC LIMIT 5` },
-  { id: 8, soru: "Ürün çeşitliliği ne durumda?", sql: `SELECT COUNT(DISTINCT "Ürün") as urun_sayisi, COUNT(DISTINCT "Ürün Grubu") as grup_sayisi FROM kds WHERE "İl" = ?` },
-  { id: 9, soru: "En verimli ürünler hangileri?", sql: `SELECT "Ürün", AVG("Verim") as ort_verim FROM kds WHERE "İl" = ? AND "Verim" > 0 GROUP BY "Ürün" ORDER BY ort_verim DESC LIMIT 5` },
-  { id: 10, soru: "Yıllık üretim değişim oranı nedir?", sql: `SELECT "Yıl", SUM("Üretim") as uretim FROM kds WHERE "İl" = ? GROUP BY "Yıl" ORDER BY "Yıl"` }
-];
-
-const URUN_SORULARI = [
-  { id: 1, soru: "Bu ürünü en çok üreten 5 il hangisi?", sql: `SELECT "İl", SUM("Üretim") as toplam FROM kds WHERE "Ürün" = ? GROUP BY "İl" ORDER BY toplam DESC LIMIT 5` },
-  { id: 2, soru: "Son 5 yılda Türkiye geneli üretim trendi nasıl?", sql: `SELECT "Yıl", SUM("Üretim") as toplam FROM kds WHERE "Ürün" = ? AND "Yıl" >= 2020 GROUP BY "Yıl" ORDER BY "Yıl"` },
-  { id: 3, soru: "Ortalama verim ne kadar?", sql: `SELECT "Yıl", AVG("Verim") as ort_verim FROM kds WHERE "Ürün" = ? GROUP BY "Yıl" ORDER BY "Yıl" DESC LIMIT 5` },
-  { id: 4, soru: "Toplam ekim alanı ne kadar?", sql: `SELECT "Yıl", SUM("Alan") as toplam_alan FROM kds WHERE "Ürün" = ? GROUP BY "Yıl" ORDER BY "Yıl" DESC LIMIT 5` },
-  { id: 5, soru: "Üretimi en çok artan iller hangileri?", sql: `SELECT "İl", (SELECT SUM("Üretim") FROM kds WHERE "Ürün" = ? AND "İl" = k."İl" AND "Yıl" = 2024) - (SELECT SUM("Üretim") FROM kds WHERE "Ürün" = ? AND "İl" = k."İl" AND "Yıl" = 2020) as fark FROM kds k WHERE "Ürün" = ? GROUP BY "İl" ORDER BY fark DESC LIMIT 5` },
-  { id: 6, soru: "Üretimi en çok azalan iller hangileri?", sql: `SELECT "İl", (SELECT SUM("Üretim") FROM kds WHERE "Ürün" = ? AND "İl" = k."İl" AND "Yıl" = 2024) - (SELECT SUM("Üretim") FROM kds WHERE "Ürün" = ? AND "İl" = k."İl" AND "Yıl" = 2020) as fark FROM kds k WHERE "Ürün" = ? GROUP BY "İl" ORDER BY fark ASC LIMIT 5` },
-  { id: 7, soru: "Kaç ilde üretiliyor?", sql: `SELECT COUNT(DISTINCT "İl") as il_sayisi FROM kds WHERE "Ürün" = ?` },
-  { id: 8, soru: "En verimli iller hangileri?", sql: `SELECT "İl", AVG("Verim") as ort_verim FROM kds WHERE "Ürün" = ? AND "Verim" > 0 GROUP BY "İl" ORDER BY ort_verim DESC LIMIT 5` },
-  { id: 9, soru: "Türkiye toplam üretimi ne kadar?", sql: `SELECT "Yıl", SUM("Üretim") as toplam FROM kds WHERE "Ürün" = ? GROUP BY "Yıl" ORDER BY "Yıl" DESC LIMIT 1` },
-  { id: 10, soru: "Yıllık büyüme oranı nedir?", sql: `SELECT "Yıl", SUM("Üretim") as uretim FROM kds WHERE "Ürün" = ? GROUP BY "Yıl" ORDER BY "Yıl"` }
-];
 
 /** ======= SQL EXECUTION ======= */
 function executeQuery(db, sql, params) {
   try {
     const stmt = db.prepare(sql);
     stmt.bind(params);
-    
     const results = [];
     while (stmt.step()) {
       results.push(stmt.getAsObject());
     }
     stmt.free();
-    
     return { success: true, data: results };
   } catch (error) {
     return { success: false, error: error.message };
   }
 }
 
+function getMaxYil(db) {
+  const result = executeQuery(db, `SELECT MAX("Yıl") as maxYil FROM kds`, []);
+  return result.success && result.data.length > 0 ? result.data[0].maxYil : 2024;
+}
+
+/** ======= DYNAMIC QUERIES ======= */
+// maxYil parametresiyle sorguları oluştur
+function getIlSorulari(Y) {
+  // Y = maxYil (örn: 2024), Y4 = 4 yıl öncesi (örn: 2020)
+  const Y4 = Y - 4;
+  return [
+    { 
+      id: 1, 
+      soru: `Bu ilde ${Y} yılında en çok üretilen 5 ürün nedir?`, 
+      sql: `SELECT "Ürün", SUM("Üretim") as toplam FROM kds WHERE "İl" = ? AND "Yıl" = ? GROUP BY "Ürün" ORDER BY toplam DESC LIMIT 5`,
+      params: (secim) => [secim, Y]
+    },
+    { 
+      id: 2, 
+      soru: "Son 3 yılda üretim trendi nasıl?", 
+      sql: `SELECT "Yıl", SUM("Üretim") as toplam FROM kds WHERE "İl" = ? AND "Yıl" >= ? GROUP BY "Yıl" ORDER BY "Yıl"`,
+      params: (secim) => [secim, Y - 2]
+    },
+    { 
+      id: 3, 
+      soru: `${Y} yılında verim ortalaması Türkiye ortalamasının üstünde mi?`, 
+      sql: `SELECT "Ürün Grubu", AVG("Verim") as il_verim, (SELECT AVG("Verim") FROM kds WHERE "Ürün Grubu" = k."Ürün Grubu" AND "Yıl" = ?) as tr_verim FROM kds k WHERE "İl" = ? AND "Yıl" = ? GROUP BY "Ürün Grubu"`,
+      params: (secim) => [Y, secim, Y]
+    },
+    { 
+      id: 4, 
+      soru: `${Y} yılında hangi ürün grubunda en güçlü?`, 
+      sql: `SELECT "Ürün Grubu", SUM("Üretim") as toplam, SUM("Alan") as alan FROM kds WHERE "İl" = ? AND "Yıl" = ? GROUP BY "Ürün Grubu" ORDER BY toplam DESC LIMIT 1`,
+      params: (secim) => [secim, Y]
+    },
+    { 
+      id: 5, 
+      soru: `${Y4}-${Y} arası üretimi en çok artan 3 ürün hangisi?`, 
+      sql: `SELECT a."Ürün", (a.toplam - b.toplam) as fark, a.toplam as son_yil, b.toplam as ilk_yil
+            FROM (SELECT "Ürün", SUM("Üretim") as toplam FROM kds WHERE "İl" = ? AND "Yıl" = ? GROUP BY "Ürün") a
+            INNER JOIN (SELECT "Ürün", SUM("Üretim") as toplam FROM kds WHERE "İl" = ? AND "Yıl" = ? GROUP BY "Ürün") b
+            ON a."Ürün" = b."Ürün"
+            ORDER BY fark DESC LIMIT 3`,
+      params: (secim) => [secim, Y, secim, Y4]
+    },
+    { 
+      id: 6, 
+      soru: `${Y4}-${Y} arası üretimi en çok azalan 3 ürün hangisi?`, 
+      sql: `SELECT a."Ürün", (a.toplam - b.toplam) as fark, a.toplam as son_yil, b.toplam as ilk_yil
+            FROM (SELECT "Ürün", SUM("Üretim") as toplam FROM kds WHERE "İl" = ? AND "Yıl" = ? GROUP BY "Ürün") a
+            INNER JOIN (SELECT "Ürün", SUM("Üretim") as toplam FROM kds WHERE "İl" = ? AND "Yıl" = ? GROUP BY "Ürün") b
+            ON a."Ürün" = b."Ürün"
+            ORDER BY fark ASC LIMIT 3`,
+      params: (secim) => [secim, Y, secim, Y4]
+    },
+    { 
+      id: 7, 
+      soru: "Son 5 yılda toplam ekim alanı trendi", 
+      sql: `SELECT "Yıl", SUM("Alan") as toplam_alan FROM kds WHERE "İl" = ? AND "Yıl" >= ? GROUP BY "Yıl" ORDER BY "Yıl"`,
+      params: (secim) => [secim, Y4]
+    },
+    { 
+      id: 8, 
+      soru: `${Y} yılında ürün çeşitliliği ne durumda?`, 
+      sql: `SELECT COUNT(DISTINCT "Ürün") as urun_sayisi, COUNT(DISTINCT "Ürün Grubu") as grup_sayisi FROM kds WHERE "İl" = ? AND "Yıl" = ?`,
+      params: (secim) => [secim, Y]
+    },
+    { 
+      id: 9, 
+      soru: `${Y} yılında en verimli 5 ürün hangileri?`, 
+      sql: `SELECT "Ürün", AVG("Verim") as ort_verim FROM kds WHERE "İl" = ? AND "Yıl" = ? AND "Verim" > 0 GROUP BY "Ürün" ORDER BY ort_verim DESC LIMIT 5`,
+      params: (secim) => [secim, Y]
+    },
+    { 
+      id: 10, 
+      soru: "Son 5 yılda yıllık üretim değişim oranı nedir?", 
+      sql: `SELECT "Yıl", SUM("Üretim") as uretim FROM kds WHERE "İl" = ? AND "Yıl" >= ? GROUP BY "Yıl" ORDER BY "Yıl"`,
+      params: (secim) => [secim, Y4]
+    }
+  ];
+}
+
+function getUrunSorulari(Y) {
+  const Y4 = Y - 4;
+  return [
+    { 
+      id: 1, 
+      soru: `${Y} yılında bu ürünü en çok üreten 5 il hangisi?`, 
+      sql: `SELECT "İl", SUM("Üretim") as toplam FROM kds WHERE "Ürün" = ? AND "Yıl" = ? GROUP BY "İl" ORDER BY toplam DESC LIMIT 5`,
+      params: (secim) => [secim, Y]
+    },
+    { 
+      id: 2, 
+      soru: "Son 5 yılda Türkiye geneli üretim trendi nasıl?", 
+      sql: `SELECT "Yıl", SUM("Üretim") as toplam FROM kds WHERE "Ürün" = ? AND "Yıl" >= ? GROUP BY "Yıl" ORDER BY "Yıl"`,
+      params: (secim) => [secim, Y4]
+    },
+    { 
+      id: 3, 
+      soru: "Son 5 yılda ortalama verim ne kadar?", 
+      sql: `SELECT "Yıl", AVG("Verim") as ort_verim FROM kds WHERE "Ürün" = ? AND "Yıl" >= ? AND "Verim" > 0 GROUP BY "Yıl" ORDER BY "Yıl"`,
+      params: (secim) => [secim, Y4]
+    },
+    { 
+      id: 4, 
+      soru: "Son 5 yılda toplam ekim alanı ne kadar?", 
+      sql: `SELECT "Yıl", SUM("Alan") as toplam_alan FROM kds WHERE "Ürün" = ? AND "Yıl" >= ? GROUP BY "Yıl" ORDER BY "Yıl"`,
+      params: (secim) => [secim, Y4]
+    },
+    { 
+      id: 5, 
+      soru: `${Y4}-${Y} arası üretimi en çok artan 5 il hangileri?`, 
+      sql: `SELECT a."İl", (a.toplam - b.toplam) as fark, a.toplam as son_yil, b.toplam as ilk_yil
+            FROM (SELECT "İl", SUM("Üretim") as toplam FROM kds WHERE "Ürün" = ? AND "Yıl" = ? GROUP BY "İl") a
+            INNER JOIN (SELECT "İl", SUM("Üretim") as toplam FROM kds WHERE "Ürün" = ? AND "Yıl" = ? GROUP BY "İl") b
+            ON a."İl" = b."İl"
+            ORDER BY fark DESC LIMIT 5`,
+      params: (secim) => [secim, Y, secim, Y4]
+    },
+    { 
+      id: 6, 
+      soru: `${Y4}-${Y} arası üretimi en çok azalan 5 il hangileri?`, 
+      sql: `SELECT a."İl", (a.toplam - b.toplam) as fark, a.toplam as son_yil, b.toplam as ilk_yil
+            FROM (SELECT "İl", SUM("Üretim") as toplam FROM kds WHERE "Ürün" = ? AND "Yıl" = ? GROUP BY "İl") a
+            INNER JOIN (SELECT "İl", SUM("Üretim") as toplam FROM kds WHERE "Ürün" = ? AND "Yıl" = ? GROUP BY "İl") b
+            ON a."İl" = b."İl"
+            ORDER BY fark ASC LIMIT 5`,
+      params: (secim) => [secim, Y, secim, Y4]
+    },
+    { 
+      id: 7, 
+      soru: `${Y} yılında kaç ilde üretiliyor?`, 
+      sql: `SELECT COUNT(DISTINCT "İl") as il_sayisi FROM kds WHERE "Ürün" = ? AND "Yıl" = ?`,
+      params: (secim) => [secim, Y]
+    },
+    { 
+      id: 8, 
+      soru: `${Y} yılında en verimli 5 il hangileri?`, 
+      sql: `SELECT "İl", AVG("Verim") as ort_verim FROM kds WHERE "Ürün" = ? AND "Yıl" = ? AND "Verim" > 0 GROUP BY "İl" ORDER BY ort_verim DESC LIMIT 5`,
+      params: (secim) => [secim, Y]
+    },
+    { 
+      id: 9, 
+      soru: `${Y} yılında Türkiye toplam üretimi ne kadar?`, 
+      sql: `SELECT SUM("Üretim") as toplam FROM kds WHERE "Ürün" = ? AND "Yıl" = ?`,
+      params: (secim) => [secim, Y]
+    },
+    { 
+      id: 10, 
+      soru: "Yıllık büyüme oranı nedir?", 
+      sql: `SELECT "Yıl", SUM("Üretim") as uretim FROM kds WHERE "Ürün" = ? AND "Yıl" >= ? GROUP BY "Yıl" ORDER BY "Yıl"`,
+      params: (secim) => [secim, Y4]
+    }
+  ];
+}
+
 /** ======= AI ANALYSIS ======= */
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
-async function generateAnalysis(secim, tip, sorular, sonuclar) {
+async function generateAnalysis(secim, tip, sorular, sonuclar, maxYil) {
   const context = tip === 'il' 
-    ? `${secim} ili için tarımsal analiz yapıyorsun.`
-    : `${secim} ürünü için Türkiye geneli analiz yapıyorsun.`;
+    ? `${secim} ili için ${maxYil} yılı tarımsal analiz yapıyorsun.`
+    : `${secim} ürünü için ${maxYil} yılı Türkiye geneli analiz yapıyorsun.`;
 
   const dataContext = sorular.map((s, i) => {
     const sonuc = sonuclar[i];
@@ -137,7 +250,13 @@ KARAR KARTI FORMATI:
 6. **Risk Seviyesi** (Düşük/Orta/Yüksek)
 7. **Güven Düzeyi** (%70-%95 arası, veri kalitesine göre)
 
-Yanıtını Türkçe ver. Sayısal verileri kullan, genel konuşma yapma.`;
+ÖNEMLİ:
+- Yanıtını Türkçe ver
+- Sayısal verileri kullan, genel konuşma yapma
+- Üretim miktarlarını ton olarak belirt
+- Verim değerlerini kg/dekar olarak belirt
+- Veri yılı: ${maxYil}
+- Verideki rakamları olduğu gibi kullan, kendi hesaplama yapma`;
 
   const response = await anthropic.messages.create({
     model: MODEL,
@@ -149,12 +268,12 @@ Yanıtını Türkçe ver. Sayısal verileri kullan, genel konuşma yapma.`;
 }
 
 /** ======= HELPER: Get Lists ======= */
-async function getIller(db) {
+function getIller(db) {
   const result = executeQuery(db, `SELECT DISTINCT "İl" FROM kds ORDER BY "İl"`, []);
   return result.success ? result.data.map(r => r['İl']) : [];
 }
 
-async function getUrunler(db) {
+function getUrunler(db) {
   const result = executeQuery(db, `SELECT DISTINCT "Ürün" FROM kds ORDER BY "Ürün"`, []);
   return result.success ? result.data.map(r => r['Ürün']) : [];
 }
@@ -165,9 +284,7 @@ export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
   
-  if (req.method === 'OPTIONS') {
-    return res.status(200).end();
-  }
+  if (req.method === 'OPTIONS') return res.status(200).end();
 
   const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown';
   if (!checkRateLimit(ip)) {
@@ -181,43 +298,31 @@ export default async function handler(req, res) {
     if (req.method === 'GET') {
       const { action } = req.query;
       
-      // DEBUG: Veritabanı yapısını test et
       if (action === 'test') {
         try {
           const tables = db.exec('SELECT name FROM sqlite_master WHERE type="table"');
           const tableList = tables.length > 0 ? tables[0].values.flat() : [];
-          
           let columns = [];
           let sampleData = [];
-          
           if (tableList.length > 0) {
-            const tableName = tableList[0];
-            const colInfo = db.exec(`PRAGMA table_info("${tableName}")`);
+            const colInfo = db.exec(`PRAGMA table_info("${tableList[0]}")`);
             columns = colInfo.length > 0 ? colInfo[0].values.map(c => c[1]) : [];
-            
-            const sample = db.exec(`SELECT * FROM "${tableName}" LIMIT 3`);
+            const sample = db.exec(`SELECT * FROM "${tableList[0]}" LIMIT 3`);
             sampleData = sample.length > 0 ? sample[0].values : [];
           }
-          
-          return res.status(200).json({ 
-            success: true, 
-            tables: tableList,
-            columns: columns,
-            sampleData: sampleData
-          });
+          const maxYil = getMaxYil(db);
+          return res.status(200).json({ success: true, tables: tableList, columns, sampleData, maxYil });
         } catch (e) {
           return res.status(200).json({ success: false, error: e.message });
         }
       }
       
       if (action === 'iller') {
-        const iller = await getIller(db);
-        return res.status(200).json({ success: true, data: iller });
+        return res.status(200).json({ success: true, data: getIller(db) });
       }
       
       if (action === 'urunler') {
-        const urunler = await getUrunler(db);
-        return res.status(200).json({ success: true, data: urunler });
+        return res.status(200).json({ success: true, data: getUrunler(db) });
       }
       
       return res.status(400).json({ error: 'Geçersiz action parametresi' });
@@ -230,18 +335,20 @@ export default async function handler(req, res) {
       if (!tip || !secim) {
         return res.status(400).json({ error: 'tip ve secim parametreleri gerekli' });
       }
-      
       if (!['il', 'urun'].includes(tip)) {
         return res.status(400).json({ error: 'tip "il" veya "urun" olmalı' });
       }
 
-      const sorular = tip === 'il' ? IL_SORULARI : URUN_SORULARI;
+      // Önce en son yılı al
+      const maxYil = getMaxYil(db);
       
+      // Sorguları dinamik oluştur
+      const sorular = tip === 'il' ? getIlSorulari(maxYil) : getUrunSorulari(maxYil);
+      
+      // Sorguları çalıştır
       const sonuclar = [];
       for (const s of sorular) {
-        const paramCount = (s.sql.match(/\?/g) || []).length;
-        const params = Array(paramCount).fill(secim);
-        
+        const params = s.params(secim);
         const result = executeQuery(db, s.sql, params);
         sonuclar.push(result);
       }
@@ -250,12 +357,13 @@ export default async function handler(req, res) {
         return res.status(500).json({ error: 'ANTHROPIC_API_KEY tanımlı değil' });
       }
 
-      const analiz = await generateAnalysis(secim, tip, sorular, sonuclar);
+      const analiz = await generateAnalysis(secim, tip, sorular, sonuclar, maxYil);
 
       return res.status(200).json({
         success: true,
         secim,
         tip,
+        yil: maxYil,
         analiz,
         veriler: sorular.map((s, i) => ({
           soru: s.soru,
