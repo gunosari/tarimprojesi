@@ -9,7 +9,7 @@ import Anthropic from '@anthropic-ai/sdk';
 /** ======= CONFIG ======= */
 const DB_FILE = 'kds_vt.db';
 const MODEL = 'claude-sonnet-4-20250514';
-const MAX_TOKENS = 4096;
+const MAX_TOKENS = 6000;
 
 /** ======= RATE LIMITING ======= */
 const rateLimitMap = new Map();
@@ -314,6 +314,33 @@ ${tip === 'il' ? `Her ürün grubu (Meyve, Sebze, Tahıl) için şu formatta bir
    - Bir satır gerekçe yaz. Örnek: "Ekim alanı daralması + ana ürünlerde üretim düşüşü → ORTA"
 
 7. **Güven Düzeyi** (%70-%95 arası, veri kalitesine göre)
+
+8. **Senaryo Analizi**
+
+   Önce TREND PROJEKSİYONU yap:
+   - Verideki son 5 yılın ekim alanı ve üretim değişim hızını hesapla (yıllık ortalama % değişim)
+   - Bu hız devam ederse 3 yıl sonrasını (${maxYil + 3}) projeksiyon olarak ver
+   - "yaklaşık", "bandında", "devam ederse" gibi koşullu ifadeler kullan
+
+   Sonra 3 SENARYO yaz (her biri 2-3 cümle, somut rakamla):
+
+   🟢 İyimser Senaryo:
+   Koşul: verim artışı + altyapı yatırımı + pazar genişlemesi
+   Dil: "Bu koşullar altında..."
+
+   🟡 Baz Senaryo:
+   Koşul: mevcut trend devam eder, ek politika yok
+   Dil: "Mevcut eğilimlerin korunması halinde..."
+
+   🔴 Kötümser Senaryo:
+   Koşul: alan daralması hızlanır + maliyet baskısı + iklim/su riski
+   Dil: "Bu risklerin birlikte gerçekleşmesi durumunda..."
+
+   SENARYO YAZIM KURALLARI:
+   - Kesinlik iddiası KULLANMA. Tüm senaryolar koşullu ifadelerle yazılmalı.
+   - Senaryolar mevcut veriden türetilmeli, dış varsayım eklenmemeli.
+   - Her senaryoda somut üretim/alan rakamı ver (yaklaşık değer olarak).
+   - Bu bölüm tahmin değil, "veri devam ederse ne olur" çerçevesidir.
 
 ÖNEMLİ:
 - Yanıtını Türkçe ver
