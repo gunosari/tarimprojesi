@@ -90,9 +90,11 @@ function getIlSorulari(Y) {
     },
     { 
       id: 3, 
-      soru: `${Y} yılında verim ortalaması Türkiye ortalamasının üstünde mi?`, 
-      sql: `SELECT "Ürün Grubu", AVG("Verim") as il_verim, (SELECT AVG("Verim") FROM kds WHERE "Ürün Grubu" = k."Ürün Grubu" AND "Yıl" = ?) as tr_verim FROM kds k WHERE "İl" = ? AND "Yıl" = ? GROUP BY "Ürün Grubu"`,
-      params: (secim) => [Y, secim, Y]
+      soru: `${Y} yılında ürün grubu bazlı üretim dağılımı ve payı nasıl?`, 
+      sql: `SELECT "Ürün Grubu", SUM("Üretim") as uretim, SUM("Alan") as alan,
+            ROUND(SUM("Üretim") * 100.0 / (SELECT SUM("Üretim") FROM kds WHERE "İl" = ? AND "Yıl" = ?), 1) as pay_yuzde
+            FROM kds WHERE "İl" = ? AND "Yıl" = ? GROUP BY "Ürün Grubu" ORDER BY uretim DESC`,
+      params: (secim) => [secim, Y, secim, Y]
     },
     { 
       id: 4, 
@@ -134,9 +136,12 @@ function getIlSorulari(Y) {
     },
     { 
       id: 9, 
-      soru: `${Y} yılında en verimli 5 ürün hangileri?`, 
-      sql: `SELECT "Ürün", AVG("Verim") as ort_verim FROM kds WHERE "İl" = ? AND "Yıl" = ? AND "Verim" > 0 GROUP BY "Ürün" ORDER BY ort_verim DESC LIMIT 5`,
-      params: (secim) => [secim, Y]
+      soru: `${Y} yılında bu il toplam üretimde Türkiye'de kaçıncı sırada?`, 
+      sql: `SELECT sira, il, toplam FROM (
+            SELECT "İl" as il, SUM("Üretim") as toplam, ROW_NUMBER() OVER (ORDER BY SUM("Üretim") DESC) as sira
+            FROM kds WHERE "Yıl" = ? GROUP BY "İl") t
+            WHERE il = ? OR sira <= 5 ORDER BY sira`,
+      params: (secim) => [Y, secim]
     },
     { 
       id: 10, 
@@ -164,9 +169,10 @@ function getUrunSorulari(Y) {
     },
     { 
       id: 3, 
-      soru: "Son 5 yılda ortalama verim ne kadar?", 
-      sql: `SELECT "Yıl", AVG("Verim") as ort_verim FROM kds WHERE "Ürün" = ? AND "Yıl" >= ? AND "Verim" > 0 GROUP BY "Yıl" ORDER BY "Yıl"`,
-      params: (secim) => [secim, Y4]
+      soru: `${Y} yılında bu ürünün üretim yoğunlaşması nasıl? (ilk 5 ilin toplam payı)`, 
+      sql: `SELECT ROUND(SUM(toplam) * 100.0 / (SELECT SUM("Üretim") FROM kds WHERE "Ürün" = ? AND "Yıl" = ?), 1) as ilk5_pay
+            FROM (SELECT SUM("Üretim") as toplam FROM kds WHERE "Ürün" = ? AND "Yıl" = ? GROUP BY "İl" ORDER BY toplam DESC LIMIT 5)`,
+      params: (secim) => [secim, Y, secim, Y]
     },
     { 
       id: 4, 
@@ -202,9 +208,11 @@ function getUrunSorulari(Y) {
     },
     { 
       id: 8, 
-      soru: `${Y} yılında en verimli 5 il hangileri?`, 
-      sql: `SELECT "İl", AVG("Verim") as ort_verim FROM kds WHERE "Ürün" = ? AND "Yıl" = ? AND "Verim" > 0 GROUP BY "İl" ORDER BY ort_verim DESC LIMIT 5`,
-      params: (secim) => [secim, Y]
+      soru: `${Y} yılında en çok üreten 5 ilin Türkiye üretimindeki payı`, 
+      sql: `SELECT "İl", SUM("Üretim") as uretim, 
+            ROUND(SUM("Üretim") * 100.0 / (SELECT SUM("Üretim") FROM kds WHERE "Ürün" = ? AND "Yıl" = ?), 1) as pay_yuzde
+            FROM kds WHERE "Ürün" = ? AND "Yıl" = ? GROUP BY "İl" ORDER BY uretim DESC LIMIT 5`,
+      params: (secim) => [secim, Y, secim, Y]
     },
     { 
       id: 9, 
