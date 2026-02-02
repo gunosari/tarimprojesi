@@ -12,6 +12,30 @@ const DB_FILE = 'kds_vt.db';
 const MODEL = 'claude-sonnet-4-20250514';
 const MAX_TOKENS = 5000;
 
+/** ======= ANALYSIS CACHE (in-memory, 24h TTL) ======= */
+const analysisCache = new Map();
+const CACHE_TTL = 24 * 60 * 60 * 1000; // 24 saat
+
+function getCacheKey(tip, secim, yil) {
+  return `${tip}|${secim}|${yil}`;
+}
+
+function getCachedAnalysis(tip, secim, yil) {
+  const key = getCacheKey(tip, secim, yil);
+  const cached = analysisCache.get(key);
+  if (!cached) return null;
+  if (Date.now() - cached.timestamp > CACHE_TTL) {
+    analysisCache.delete(key);
+    return null;
+  }
+  return cached.analiz;
+}
+
+function setCachedAnalysis(tip, secim, yil, analiz) {
+  const key = getCacheKey(tip, secim, yil);
+  analysisCache.set(key, { analiz, timestamp: Date.now() });
+}
+
 /** ======= RATE LIMITING ======= */
 const rateLimitMap = new Map();
 const RATE_LIMIT_WINDOW = 60000;
@@ -283,6 +307,7 @@ GENEL KURALLAR:
 - Üretim miktarlarını ton olarak belirt, büyük sayılarda "milyon ton" veya "bin ton" kullan
 - Yüzde değerlerini tutarlı formatta yaz: %1, %2, %12,8 (ondalıklı ise virgül kullan)
 - Veride olmayan yeni üretim/alan değerleri icat etme. Gerekli oranları yalnızca verilen seriden türet.
+- Türetilen oranları "yaklaşık" ve "hesaplanan" olarak belirt; ham veri gibi sunma.
 - Yüzde ve sıralama bilgilerini veride nasıl geçiyorsa öyle yaz
 
 AKSİYON YAZIM KURALLARI (kesindir, her çalıştırmada aynı mantık):
@@ -429,6 +454,20 @@ export default async function handler(req, res) {
       }
 
       const maxYil = getMaxYil(db);
+
+      // Cache kontrolü — aynı analiz 24 saat içinde tekrar üretilmez
+      const cachedAnaliz = getCachedAnalysis(tip, secim, maxYil);
+      if (cachedAnaliz) {
+        return res.status(200).json({
+          success: true,
+          secim,
+          tip,
+          yil: maxYil,
+          analiz: cachedAnaliz,
+          cached: true
+        });
+      }
+
       const sorular = tip === 'il' ? getIlSorulari(maxYil) : getUrunSorulari(maxYil);
       
       const sonuclar = [];
@@ -443,6 +482,9 @@ export default async function handler(req, res) {
       }
 
       const analiz = await generateAnalysis(secim, tip, sorular, sonuclar, maxYil);
+
+      // Cache'e kaydet
+      setCachedAnalysis(tip, secim, maxYil, analiz);
 
       return res.status(200).json({
         success: true,
