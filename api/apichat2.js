@@ -263,14 +263,32 @@ Aşağıdaki verilere dayanarak KARAR KARTI formatında analiz yap:
 ${dataContext}
 
 KARAR KARTI FORMATI:
-1. **Genel Değerlendirme** - Her ürün grubu (Meyve, Sebze, Tahıl) için şu formatta bir cümle yaz:
-   "Türkiye'de ${maxYil} yılında [ürün grubu] üretimi [TR toplam] ton iken [İl] üretimi [il toplam] ton olup Türkiye üretimine katkısı %[pay] ile [sıra]. sıradadır."
-   Sonra 1-2 cümle genel değerlendirme ekle.
-2. **Güçlü Yönler** (3 madde)
-3. **Zayıf Yönler / Riskler** (3 madde)
-4. **Trend Analizi** (Yükseliş/Düşüş/Durağan + açıklama)
-5. **Önerilen Aksiyonlar** (3-5 somut öneri)
-6. **Risk Seviyesi** (Düşük/Orta/Yüksek)
+
+1. **Genel Değerlendirme**
+${tip === 'il' ? `Her ürün grubu (Meyve, Sebze, Tahıl) için şu formatta bir cümle yaz:
+   "Türkiye'de ${maxYil} yılında [ürün grubu] üretimi [TR toplam] ton iken ${secim} üretimi [il toplam] ton olup Türkiye üretimine katkısı %[pay] ile [sıra]. sıradadır."
+   Sıralama bilgisini karıştırma: ürün grubu sıralaması ile toplam üretim sıralamasını ayrı ayrı belirt.
+   Sonra 1-2 cümle genel değerlendirme ekle.` 
+: `Bu ürünün Türkiye genelindeki durumu, üretim trendi ve yoğunlaşma analizi ile 2-3 cümle özet yaz.`}
+
+2. **Güçlü Yönler** (3 madde, her maddede veriden somut rakam kullan)
+
+3. **Zayıf Yönler / Riskler** (3 madde, her maddede veriden somut rakam kullan)
+
+4. **Trend Analizi**
+   - Yön: Yükseliş / Düşüş / Durağan / Dalgalı
+   - Son yıl değişiminin geçici mi yapısal mı olduğunu değerlendir
+   - Ekim alanı ile üretim arasındaki ilişkiyi yorumla (alan daralıyor ama üretim artıyorsa verim artışı var, ikisi birlikte düşüyorsa yapısal sorun var)
+
+5. **Önerilen Aksiyonlar** - Rol bazlı ayır:
+   - 🏛️ Bakanlık / Politika yapıcı için: (1-2 öneri)
+   - 🏢 İl Müdürlüğü / Kalkınma Ajansı için: (1-2 öneri)
+   - 🌾 Üretici / Yatırımcı için: (1-2 öneri)
+
+6. **Risk Seviyesi**
+   - Düşük / Orta / Yüksek
+   - Bir satır gerekçe yaz. Örnek: "Alan daralması + iklim oynaklığı → ORTA"
+
 7. **Güven Düzeyi** (%70-%95 arası, veri kalitesine göre)
 
 ÖNEMLİ:
