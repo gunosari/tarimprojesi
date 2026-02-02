@@ -119,7 +119,9 @@ function getMaxYil(db) {
 function safeJson(obj, maxLen = 4000) {
   let s;
   try {
-    s = JSON.stringify(obj ?? null);
+    // Dizi ise önce satır sayısını sınırla (ilk 20 kayıt yeter)
+    const trimmed = Array.isArray(obj) && obj.length > 20 ? obj.slice(0, 20) : obj;
+    s = JSON.stringify(trimmed ?? null);
     if (s === undefined) s = String(obj);
   } catch {
     s = String(obj);
@@ -403,7 +405,7 @@ function getUrunler(db) {
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
   
   if (req.method === 'OPTIONS') return res.status(200).end();
 
