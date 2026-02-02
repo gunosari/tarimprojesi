@@ -1,4 +1,5 @@
 // api/apichat2.js — NeoBi Karar Destek Sistemi API (Claude API)
+// v2.1 — system/user ayrımı, safeJson, WASM lokal, whitelist, IP parse
 export const config = { runtime: 'nodejs', maxDuration: 60 };
 
 import fs from 'fs';
@@ -9,12 +10,18 @@ import Anthropic from '@anthropic-ai/sdk';
 /** ======= CONFIG ======= */
 const DB_FILE = 'kds_vt.db';
 const MODEL = 'claude-sonnet-4-20250514';
-const MAX_TOKENS = 7000;
+const MAX_TOKENS = 5000;
 
 /** ======= RATE LIMITING ======= */
 const rateLimitMap = new Map();
 const RATE_LIMIT_WINDOW = 60000;
 const RATE_LIMIT_MAX = 10;
+
+function getClientIP(req) {
+  // x-forwarded-for bazen "ip1, ip2" gelir — ilkini al
+  const xf = req.headers['x-forwarded-for'];
+  return (Array.isArray(xf) ? xf[0] : (xf || '')).split(',')[0].trim() || req.socket.remoteAddress || 'unknown';
+}
 
 function checkRateLimit(ip) {
   const now = Date.now();
@@ -33,8 +40,15 @@ let sqlPromise = null;
 async function getSQL() {
   if (sqlPromise) return sqlPromise;
   sqlPromise = (async () => {
-    const wasmResponse = await fetch('https://sql.js.org/dist/sql-wasm.wasm');
-    const wasmBinary = await wasmResponse.arrayBuffer();
+    // Önce lokal WASM'ı dene, yoksa CDN fallback
+    const localWasm = path.join(process.cwd(), 'public', 'sql-wasm.wasm');
+    let wasmBinary;
+    try {
+      wasmBinary = fs.readFileSync(localWasm);
+    } catch {
+      const wasmResponse = await fetch('https://sql.js.org/dist/sql-wasm.wasm');
+      wasmBinary = await wasmResponse.arrayBuffer();
+    }
     return await initSqlJs({ wasmBinary });
   })();
   return sqlPromise;
@@ -70,10 +84,14 @@ function getMaxYil(db) {
   return result.success && result.data.length > 0 ? result.data[0].maxYil : 2024;
 }
 
+/** ======= SAFE JSON (token tasarrufu) ======= */
+function safeJson(obj, maxLen = 4000) {
+  const s = JSON.stringify(obj);
+  return s.length > maxLen ? s.slice(0, maxLen) + '...(kırpıldı)' : s;
+}
+
 /** ======= DYNAMIC QUERIES ======= */
-// maxYil parametresiyle sorguları oluştur
 function getIlSorulari(Y) {
-  // Y = maxYil (örn: 2024), Y4 = 4 yıl öncesi (örn: 2020)
   const Y4 = Y - 4;
   return [
     { 
@@ -247,16 +265,39 @@ const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 async function generateAnalysis(secim, tip, sorular, sonuclar, maxYil) {
   const context = tip === 'il' 
-    ? `${secim} ili için ${maxYil} yılı tarımsal analiz yapıyorsun.`
-    : `${secim} ürünü için ${maxYil} yılı Türkiye geneli analiz yapıyorsun.`;
+    ? `${secim} ili için ${maxYil} yılı tarımsal analiz.`
+    : `${secim} ürünü için ${maxYil} yılı Türkiye geneli analiz.`;
 
+  // safeJson ile token tasarrufu
   const dataContext = sorular.map((s, i) => {
     const sonuc = sonuclar[i];
-    return `**${s.soru}**\nVeri: ${JSON.stringify(sonuc.data || sonuc.error)}`;
+    return `**${s.soru}**\nVeri: ${safeJson(sonuc.data || sonuc.error)}`;
   }).join('\n\n');
 
-  const systemPrompt = `Sen bir tarım ekonomisti ve karar destek uzmanısın. 
-${context}
+  // SYSTEM: Kimlik + kurallar (değişmez anayasa)
+  const systemMessage = `Sen bir tarım ekonomisti ve karar destek uzmanısın.
+Yanıtını Türkçe ver. Bu bir chatbot yazısı değil, bir karar belgesidir. Kurumsal ve profesyonel dil kullan.
+
+GENEL KURALLAR:
+- Sayısal verileri kullan, genel konuşma yapma
+- Üretim miktarlarını ton olarak belirt, büyük sayılarda "milyon ton" veya "bin ton" kullan
+- Yüzde değerlerini tutarlı formatta yaz: %1, %2, %12,8 (ondalıklı ise virgül kullan)
+- Veride olmayan yeni üretim/alan değerleri icat etme. Gerekli oranları yalnızca verilen seriden türet.
+- Yüzde ve sıralama bilgilerini veride nasıl geçiyorsa öyle yaz
+
+AKSİYON YAZIM KURALLARI (kesindir, her çalıştırmada aynı mantık):
+📉 Üretimi AZALAN ürünler → yalnızca: neden analizi, yapısal sorun tespiti, önleyici tedbirler, alternatif ürüne geçiş. ❌ Asla: kapasite artırımı, yatırım çağrısı.
+📈 Üretimi ARTAN ürünler → yalnızca: kapasite artışı, yatırım fırsatı, ihracat/pazar geliştirme, değer zinciri. ❌ Asla: sorun odaklı dil, risk büyütme.
+👑 Lider/doygun ürünler → yalnızca: korumaya dönük politika, verimlilik artışı, katma değer, ihracat/markalaşma. ❌ Asla: alan genişletme, agresif yatırım dili.
+Aynı ürün için çelişkili aksiyon türleri kullanma.
+
+SENARYO YAZIM KURALLARI:
+- Kesinlik iddiası KULLANMA. Tüm senaryolar koşullu ifadelerle yazılmalı.
+- Senaryolar mevcut veriden türetilmeli, dış varsayım eklenmemeli.
+- "yaklaşık", "bandında", "devam ederse" gibi koşullu ifadeler kullan.`;
+
+  // USER: Bağlam + veri + format talebi
+  const userMessage = `${context}
 
 Aşağıdaki verilere dayanarak KARAR KARTI formatında analiz yap:
 
@@ -268,114 +309,42 @@ KARAR KARTI FORMATI:
 ${tip === 'il' ? `Her ürün grubu (Meyve, Sebze, Tahıl) için şu formatta bir cümle yaz:
    "Türkiye'de ${maxYil} yılında [ürün grubu] üretimi [TR toplam] ton iken ${secim} üretimi [il toplam] ton olup Türkiye üretimine katkısı %[pay] ile [sıra]. sıradadır."
    Sıralama bilgisini karıştırma: ürün grubu sıralaması ile toplam üretim sıralamasını ayrı ayrı belirt.
-   Son olarak ilin stratejik konumunu özetleyen tek bir sentez cümlesi yaz. Örnek format:
-   "${secim}, Türkiye tarımında [güçlü olduğu alan]da uzmanlaşmış; [zayıf olduğu alan] açısından ise stratejik değil, tamamlayıcı bir il konumundadır."` 
+   Son olarak ilin stratejik konumunu özetleyen tek bir sentez cümlesi yaz.` 
 : `Bu ürünün Türkiye genelindeki durumu, üretim trendi ve yoğunlaşma analizi ile 2-3 cümle özet yaz.`}
 
-2. **Güçlü Yönler** (3 madde, her maddede veriden somut rakam kullan)
-   - Ürün çeşitliliği yüksekse şunu belirt: "Yüksek ürün çeşitliliği, iklim ve piyasa şoklarına karşı dayanıklılık sağlamaktadır."
+2. **Güçlü Yönler** (3 madde, somut rakam. Ürün çeşitliliği yüksekse dayanıklılık avantajını belirt.)
 
-3. **Zayıf Yönler / Riskler** (3 madde, her birini tipine göre etiketle)
-   - 🔴 Yapısal risk: Uzun vadeli, kolay değişmez (ekim alanı daralması, altyapı eksikliği)
-   - 🟡 Sektörel risk: Belirli ürünlerdeki düşüş (domates, karpuz vb.)
-   - 🟠 Konjonktürel risk: Geçici dalgalanma (yıllık üretim düşüşü, iklim etkisi)
+3. **Zayıf Yönler / Riskler** (3 madde, her birini tipine göre etiketle: 🔴 Yapısal / 🟡 Sektörel / 🟠 Konjonktürel)
 
-4. **Trend Analizi**
-   - Yön: Yükseliş / Düşüş / Durağan / Dalgalı
-   - Son yıl değişiminin geçici mi yapısal mı olduğunu değerlendir
-   - Ekim alanı ile üretim arasındaki ilişkiyi yorumla:
-     * Alan daralıyor + üretim stabil = verim artışıyla dengeleniyor ama kırılgan
-     * Alan ve üretim birlikte düşüyor = yapısal sorun
-     * Alan stabil + üretim artıyor = sağlıklı büyüme
+4. **Trend Analizi** (Yön + geçici mi yapısal mı + alan-üretim ilişkisi yorumu)
 
-5. **Önerilen Aksiyonlar** - Rol bazlı ayır:
-   - 🏛️ Bakanlık / Politika yapıcı için: (1-2 öneri)
-   - 🏢 İl Müdürlüğü / Kalkınma Ajansı için: (1-2 öneri)
-   - 🌾 Üretici / Yatırımcı için: (1-2 öneri)
+5. **Önerilen Aksiyonlar** - Rol bazlı:
+   - 🏛️ Bakanlık / Politika yapıcı: (1-2 öneri)
+   - 🏢 İl Müdürlüğü / Kalkınma Ajansı: (1-2 öneri)
+   - 🌾 Üretici / Yatırımcı: (1-2 öneri)
 
-   AKSİYON YAZIM KURALLARI (bu kurallar kesindir, her çalıştırmada aynı mantığı uygula):
-   
-   📉 Üretimi AZALAN ürünler için yalnızca:
-      → Neden analizi, yapısal sorun tespiti, önleyici tedbirler, alternatif ürüne geçiş
-      ❌ Asla: kapasite artırımı, yatırım çağrısı
-   
-   📈 Üretimi ARTAN ürünler için yalnızca:
-      → Kapasite artışı, yatırım fırsatı, ihracat/pazar geliştirme, değer zinciri (soğuk hava, lojistik)
-      ❌ Asla: sorun odaklı dil, risk büyütme
-   
-   👑 Lider/doygun konumdaki ürünler için yalnızca:
-      → Korumaya dönük politika, verimlilik artışı, katma değer, ihracat/markalaşma
-      ❌ Asla: alan genişletme çağrısı, agresif yatırım dili
-   
-   Aynı ürün için çelişkili aksiyon türleri kullanma. Aksiyon dili her çalıştırmada aynı mantığı korumalı.
+6. **Risk Seviyesi** (Düşük/Orta/Yüksek + bir satır gerekçe)
 
-6. **Risk Seviyesi**
-   - Düşük / Orta / Yüksek
-   - Bir satır gerekçe yaz. Örnek: "Ekim alanı daralması + ana ürünlerde üretim düşüşü → ORTA"
+7. **Karar Sinyalleri** (🟢 koru 🟡 izle 🔴 müdahale — her ürün grubu/tema için tek satır)
 
-7. **Karar Sinyalleri**
-   Yönetici için 3 satırlık özet. Her ürün grubu veya ana tema için tek satır sinyal ver:
-   - 🟢 [güçlü alan]: koru ve güçlendir
-   - 🟡 [orta alan]: seçici destek / izle
-   - 🔴 [zayıf alan]: genişleme hedefi koyma / yapısal müdahale gerekli
-
-8. **Güven Düzeyi**
-   - %70-%95 arası yüzde ver
-   - Ardından 2-3 maddeyle gerekçelendir:
-     * Veri kalitesi (tam mı, eksik mi)
-     * Seri uzunluğu (kaç yıllık veri)
-     * Modele dahil edilmeyen değişkenler (iklim, maliyet vb. → belirsizlik payı)
+8. **Güven Düzeyi** (%70-%95 + 2-3 madde gerekçe: veri kalitesi, seri uzunluğu, dahil edilmeyen değişkenler)
 
 9. **Senaryo Analizi**
-
-   Önce TREND PROJEKSİYONU yap:
-   - Verideki son 5 yılın ekim alanı ve üretim değişim hızını hesapla (yıllık ortalama % değişim)
-   - Bu hız devam ederse 3 yıl sonrasını (${maxYil + 3}) projeksiyon olarak ver
-   - "yaklaşık", "bandında", "devam ederse" gibi koşullu ifadeler kullan
-
-   Sonra 3 SENARYO yaz (her biri 2-3 cümle, somut rakamla):
-
-   🟢 İyimser Senaryo:
-   Koşul: verim artışı + altyapı yatırımı + pazar genişlemesi
-   Dil: "Bu koşullar altında..."
-
-   🟡 Baz Senaryo:
-   Koşul: mevcut trend devam eder, ek politika yok
-   Dil: "Mevcut eğilimlerin korunması halinde..."
-
-   🔴 Kötümser Senaryo:
-   Koşul: alan daralması hızlanır + maliyet baskısı + iklim/su riski
-   Dil: "Bu risklerin birlikte gerçekleşmesi durumunda..."
-
-   SENARYO YAZIM KURALLARI:
-   - Bölüm başına şu cümleyi ekle: "Senaryolar, mevcut eğilimler ve veriye dayalı varsayımlar üzerinden üretilmiş olup, politika ve yatırım kararları için yol gösterici niteliktedir."
-   - Kesinlik iddiası KULLANMA. Tüm senaryolar koşullu ifadelerle yazılmalı.
-   - Senaryolar mevcut veriden türetilmeli, dış varsayım eklenmemeli.
-   - Her senaryoda somut üretim/alan rakamı ver (yaklaşık değer olarak).
-   - Bu bölüm tahmin değil, "veri devam ederse ne olur" çerçevesidir.
+   Trend projeksiyonu: Son 5 yılın değişim hızıyla ${maxYil + 3} projeksiyonu.
+   Sonra 3 senaryo (her biri 2-3 cümle, somut rakam):
+   🟢 İyimser: "Bu koşullar altında..."
+   🟡 Baz: "Mevcut eğilimlerin korunması halinde..."
+   🔴 Kötümser: "Bu risklerin birlikte gerçekleşmesi durumunda..."
+   Başına disclaimer ekle: "Senaryolar, mevcut eğilimler ve veriye dayalı varsayımlar üzerinden üretilmiş olup yön gösterici niteliktedir."
 
 10. **Analiz Sınırları**
-   Şu kutuyu kısa ve net yaz:
-   "Bu karar kartı;
-   - Ürün bazında kesin üretim tahmini yapmaz
-   - Çiftçi bazlı gelir veya kârlılık hesaplaması içermez
-   - İklim senaryolarını modellemez
-   Analiz; TÜİK verileri üzerinden geçmiş ${maxYil - 4}–${maxYil} yılları gerçekleşmiş üretim verileri ve eğilimlere dayalı olup yön gösterici niteliktedir."
-
-ÖNEMLİ:
-- Yanıtını Türkçe ver
-- Sayısal verileri kullan, genel konuşma yapma
-- Üretim miktarlarını ton olarak belirt, büyük sayılarda "milyon ton" veya "bin ton" kullan
-- Yüzde değerlerini tutarlı formatta yaz: %1, %2, %12,8 (ondalıklı ise virgül kullan)
-- Veri yılı: ${maxYil}
-- Verideki rakamları olduğu gibi kullan, kendi hesaplama yapma
-- Yüzde ve sıralama bilgilerini veride nasıl geçiyorsa öyle yaz
-- Bu bir chatbot yazısı değil, bir karar belgesidir. Kurumsal ve profesyonel dil kullan.`;
+   "Bu karar kartı; ürün bazında kesin üretim tahmini yapmaz, çiftçi bazlı gelir hesaplaması içermez, iklim senaryolarını modellemez. Analiz; TÜİK verileri üzerinden ${maxYil - 4}–${maxYil} yılları gerçekleşmiş verilere dayalı olup yön gösterici niteliktedir."`;
 
   const response = await anthropic.messages.create({
     model: MODEL,
     max_tokens: MAX_TOKENS,
-    messages: [{ role: 'user', content: systemPrompt }]
+    system: systemMessage,
+    messages: [{ role: 'user', content: userMessage }]
   });
 
   return response.content[0].text;
@@ -400,7 +369,7 @@ export default async function handler(req, res) {
   
   if (req.method === 'OPTIONS') return res.status(200).end();
 
-  const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown';
+  const ip = getClientIP(req);
   if (!checkRateLimit(ip)) {
     return res.status(429).json({ error: 'Çok fazla istek. Lütfen 1 dakika bekleyin.' });
   }
@@ -453,13 +422,15 @@ export default async function handler(req, res) {
         return res.status(400).json({ error: 'tip "il" veya "urun" olmalı' });
       }
 
-      // Önce en son yılı al
+      // Whitelist kontrolü — prompt injection koruması
+      const validList = tip === 'il' ? getIller(db) : getUrunler(db);
+      if (!validList.includes(secim)) {
+        return res.status(400).json({ error: 'Geçersiz seçim' });
+      }
+
       const maxYil = getMaxYil(db);
-      
-      // Sorguları dinamik oluştur
       const sorular = tip === 'il' ? getIlSorulari(maxYil) : getUrunSorulari(maxYil);
       
-      // Sorguları çalıştır
       const sonuclar = [];
       for (const s of sorular) {
         const params = s.params(secim);
