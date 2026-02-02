@@ -36,6 +36,13 @@ function setCachedAnalysis(tip, secim, yil, analiz) {
   analysisCache.set(key, { analiz, timestamp: Date.now() });
 }
 
+function cleanupCache() {
+  const now = Date.now();
+  for (const [key, val] of analysisCache.entries()) {
+    if (now - val.timestamp > CACHE_TTL) analysisCache.delete(key);
+  }
+}
+
 /** ======= RATE LIMITING ======= */
 const rateLimitMap = new Map();
 const RATE_LIMIT_WINDOW = 60000;
@@ -108,9 +115,15 @@ function getMaxYil(db) {
   return result.success && result.data.length > 0 ? result.data[0].maxYil : 2024;
 }
 
-/** ======= SAFE JSON (token tasarrufu) ======= */
+/** ======= SAFE JSON (token tasarrufu, asla patlamaz) ======= */
 function safeJson(obj, maxLen = 4000) {
-  const s = JSON.stringify(obj);
+  let s;
+  try {
+    s = JSON.stringify(obj ?? null);
+    if (s === undefined) s = String(obj);
+  } catch {
+    s = String(obj);
+  }
   return s.length > maxLen ? s.slice(0, maxLen) + '...(kırpıldı)' : s;
 }
 
@@ -455,6 +468,9 @@ export default async function handler(req, res) {
 
       const maxYil = getMaxYil(db);
 
+      // Süresi dolan cache girdilerini temizle
+      cleanupCache();
+
       // Cache kontrolü — aynı analiz 24 saat içinde tekrar üretilmez
       const cachedAnaliz = getCachedAnalysis(tip, secim, maxYil);
       if (cachedAnaliz) {
@@ -464,7 +480,8 @@ export default async function handler(req, res) {
           tip,
           yil: maxYil,
           analiz: cachedAnaliz,
-          cached: true
+          cached: true,
+          cacheKey: getCacheKey(tip, secim, maxYil)
         });
       }
 
@@ -492,6 +509,8 @@ export default async function handler(req, res) {
         tip,
         yil: maxYil,
         analiz,
+        cached: false,
+        cacheKey: getCacheKey(tip, secim, maxYil),
         veriler: sorular.map((s, i) => ({
           soru: s.soru,
           sonuc: sonuclar[i]
