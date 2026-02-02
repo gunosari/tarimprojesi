@@ -4,387 +4,336 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>NeoBi Karar Destek Sistemi</title>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
   <style>
-    * {
-      margin: 0;
-      padding: 0;
-      box-sizing: border-box;
+    :root {
+      --primary: #0B3D91;
+      --primary-light: #1565C0;
+      --primary-pale: #e8eef7;
+      --accent: #1976D2;
+      --bg: #f0f4f8;
+      --card: #ffffff;
+      --text: #1a1a2e;
+      --muted: #6b7280;
+      --radius: 14px;
     }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
 
     body {
-      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-      background: linear-gradient(135deg, #1a5f2a 0%, #2d8f4a 100%);
+      font-family: 'DM Sans', system-ui, -apple-system, sans-serif;
+      background: var(--bg);
+      color: var(--text);
       min-height: 100vh;
-      padding: 20px;
+      padding: 12px 16px 32px;
     }
 
-    .container {
-      max-width: 900px;
-      margin: 0 auto;
-    }
+    .container { max-width: 920px; margin: 0 auto; }
 
-    .header {
+    /* Hero */
+    .hero {
       text-align: center;
-      color: white;
-      margin-bottom: 30px;
-    }
-
-    .header h1 {
-      font-size: 2rem;
-      margin-bottom: 8px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      gap: 10px;
-    }
-
-    .header p {
-      opacity: 0.9;
-      font-size: 1rem;
-    }
-
-    .card {
-      background: white;
-      border-radius: 16px;
-      padding: 24px;
+      padding: 28px 16px 20px;
+      background: linear-gradient(135deg, var(--primary) 0%, var(--primary-light) 100%);
+      border-radius: var(--radius);
       margin-bottom: 20px;
-      box-shadow: 0 4px 20px rgba(0,0,0,0.15);
+      box-shadow: 0 4px 24px rgba(11,61,145,.18);
+    }
+
+    .hero h1 {
+      font-size: 1.5rem;
+      font-weight: 700;
+      color: #fff;
+      margin-bottom: 4px;
+      letter-spacing: -0.3px;
+    }
+
+    .hero p {
+      color: rgba(255,255,255,.85);
+      font-size: 0.9rem;
+    }
+
+    /* Card */
+    .card {
+      background: var(--card);
+      border-radius: var(--radius);
+      padding: 24px;
+      margin-bottom: 16px;
+      box-shadow: 0 2px 12px rgba(0,0,0,.05);
+      border: 1px solid #e2e8f0;
     }
 
     .card-title {
-      font-size: 1.1rem;
+      font-size: 1rem;
       font-weight: 600;
-      color: #1a5f2a;
+      color: var(--primary);
       margin-bottom: 16px;
       display: flex;
       align-items: center;
       gap: 8px;
     }
 
-    .tabs {
-      display: flex;
-      gap: 10px;
-      margin-bottom: 20px;
-    }
+    /* Tabs */
+    .tabs { display: flex; gap: 10px; margin-bottom: 20px; }
 
     .tab {
       flex: 1;
-      padding: 12px 20px;
-      border: 2px solid #e0e0e0;
-      background: white;
-      border-radius: 10px;
+      padding: 13px 18px;
+      border: 2px solid #dde3ea;
+      background: var(--card);
+      border-radius: 11px;
       cursor: pointer;
-      font-size: 1rem;
+      font-family: inherit;
+      font-size: 0.95rem;
       font-weight: 500;
-      transition: all 0.2s;
+      transition: all .2s;
       text-align: center;
+      color: #555;
     }
 
-    .tab:hover {
-      border-color: #2d8f4a;
-    }
+    .tab:hover { border-color: var(--accent); color: var(--primary); }
 
     .tab.active {
-      background: #2d8f4a;
-      color: white;
-      border-color: #2d8f4a;
+      background: linear-gradient(135deg, var(--primary), var(--primary-light));
+      color: #fff;
+      border-color: transparent;
     }
 
-    .form-group {
-      margin-bottom: 20px;
-    }
+    /* Form */
+    .form-group { margin-bottom: 20px; }
 
     .form-group label {
       display: block;
-      margin-bottom: 8px;
+      margin-bottom: 7px;
       font-weight: 500;
-      color: #333;
+      color: #444;
+      font-size: 0.9rem;
     }
 
     .form-group select {
       width: 100%;
-      padding: 14px 16px;
-      border: 2px solid #e0e0e0;
-      border-radius: 10px;
+      padding: 13px 16px;
+      border: 2px solid #dde3ea;
+      border-radius: 11px;
+      font-family: inherit;
       font-size: 1rem;
-      background: white;
+      background: var(--card);
       cursor: pointer;
-      transition: border-color 0.2s;
+      transition: border-color .2s;
+      color: #333;
     }
 
-    .form-group select:focus {
-      outline: none;
-      border-color: #2d8f4a;
-    }
+    .form-group select:focus { outline: none; border-color: var(--accent); }
 
+    /* Button */
     .btn {
       width: 100%;
-      padding: 16px;
-      background: linear-gradient(135deg, #1a5f2a 0%, #2d8f4a 100%);
-      color: white;
+      padding: 15px;
+      background: linear-gradient(135deg, var(--primary), var(--primary-light));
+      color: #fff;
       border: none;
-      border-radius: 10px;
-      font-size: 1.1rem;
+      border-radius: 11px;
+      font-family: inherit;
+      font-size: 1.05rem;
       font-weight: 600;
       cursor: pointer;
-      transition: transform 0.2s, box-shadow 0.2s;
+      transition: transform .2s, box-shadow .2s;
     }
 
     .btn:hover {
       transform: translateY(-2px);
-      box-shadow: 0 4px 15px rgba(45, 143, 74, 0.4);
+      box-shadow: 0 6px 20px rgba(11,61,145,.3);
     }
 
     .btn:disabled {
-      background: #ccc;
+      background: #b0b8c4;
       cursor: not-allowed;
       transform: none;
       box-shadow: none;
     }
 
-    .loading {
-      display: none;
-      text-align: center;
-      padding: 40px;
+    .btn-secondary {
+      margin-top: 18px;
+      background: #f1f5f9;
+      color: #444;
+      border: 2px solid #dde3ea;
     }
 
-    .loading.active {
-      display: block;
+    .btn-secondary:hover {
+      background: #e2e8f0;
+      box-shadow: none;
+      transform: none;
     }
+
+    /* Loading */
+    .loading { display: none; text-align: center; padding: 44px 20px; }
+    .loading.active { display: block; }
 
     .spinner {
-      width: 50px;
-      height: 50px;
-      border: 4px solid #e0e0e0;
-      border-top-color: #2d8f4a;
+      width: 46px; height: 46px;
+      border: 4px solid #dde3ea;
+      border-top-color: var(--accent);
       border-radius: 50%;
       animation: spin 1s linear infinite;
-      margin: 0 auto 16px;
+      margin: 0 auto 14px;
     }
 
-    @keyframes spin {
-      to { transform: rotate(360deg); }
-    }
+    @keyframes spin { to { transform: rotate(360deg); } }
 
-    .loading p {
-      color: #666;
-      font-size: 1rem;
-    }
+    .loading p { color: var(--muted); font-size: 0.95rem; }
+    .loading .muted { font-size: .83rem; color: #aaa; margin-top: 5px; }
 
-    .result {
+    /* Error */
+    .error-box {
+      background: #fef2f2;
+      color: #b91c1c;
+      padding: 13px 18px;
+      border-radius: 10px;
+      margin-bottom: 14px;
       display: none;
+      font-size: .9rem;
+      border: 1px solid #fecaca;
     }
 
-    .result.active {
-      display: block;
-    }
+    .error-box.active { display: block; }
+
+    /* Result */
+    .result { display: none; }
+    .result.active { display: block; }
 
     .result-header {
       display: flex;
       justify-content: space-between;
       align-items: center;
-      margin-bottom: 20px;
-      padding-bottom: 16px;
-      border-bottom: 2px solid #e8f5e9;
+      margin-bottom: 18px;
+      padding-bottom: 14px;
+      border-bottom: 2px solid var(--primary-pale);
     }
 
     .result-title {
-      font-size: 1.3rem;
+      font-size: 1.2rem;
       font-weight: 700;
-      color: #1a5f2a;
+      color: var(--primary);
     }
 
     .result-badge {
-      background: #e8f5e9;
-      color: #1a5f2a;
-      padding: 6px 14px;
+      background: var(--primary-pale);
+      color: var(--primary);
+      padding: 5px 14px;
       border-radius: 20px;
-      font-size: 0.85rem;
+      font-size: .82rem;
       font-weight: 600;
     }
 
-    .analysis-content {
-      line-height: 1.7;
-      color: #333;
-    }
+    /* Analysis Content */
+    .analysis-content { line-height: 1.75; color: #333; }
 
-    .analysis-content h1, 
+    .analysis-content h1,
     .analysis-content h2 {
-      color: #1a5f2a;
-      margin: 20px 0 12px;
-      font-size: 1.2rem;
+      color: var(--primary);
+      margin: 20px 0 10px;
+      font-size: 1.12rem;
     }
 
     .analysis-content h2 {
-      font-size: 1.1rem;
-      border-left: 4px solid #2d8f4a;
+      font-size: 1.02rem;
+      border-left: 4px solid var(--accent);
       padding-left: 12px;
     }
 
-    .analysis-content p {
-      margin-bottom: 12px;
-    }
+    .analysis-content p { margin-bottom: 12px; }
+    .analysis-content ul, .analysis-content ol { margin: 10px 0; padding-left: 24px; }
+    .analysis-content li { margin-bottom: 8px; }
+    .analysis-content strong { color: var(--primary); }
 
-    .analysis-content ul, 
-    .analysis-content ol {
-      margin: 12px 0;
-      padding-left: 24px;
-    }
-
-    .analysis-content li {
-      margin-bottom: 8px;
-    }
-
-    .analysis-content strong {
-      color: #1a5f2a;
-    }
-
+    /* Data section */
     .data-section {
-      margin-top: 30px;
-      padding-top: 20px;
-      border-top: 2px solid #e8f5e9;
+      margin-top: 24px;
+      padding-top: 16px;
+      border-top: 2px solid var(--primary-pale);
     }
 
-    .data-title {
-      font-size: 1rem;
+    .data-toggle {
       font-weight: 600;
-      color: #1a5f2a;
-      margin-bottom: 16px;
+      color: var(--primary);
       cursor: pointer;
       display: flex;
       align-items: center;
-      gap: 8px;
+      gap: 6px;
+      font-size: .92rem;
+      margin-bottom: 12px;
+      user-select: none;
     }
 
-    .data-title:hover {
-      opacity: 0.8;
-    }
+    .data-toggle:hover { opacity: .75; }
 
-    .data-grid {
-      display: none;
-      gap: 12px;
-    }
-
-    .data-grid.active {
-      display: grid;
-    }
+    .data-grid { display: none; gap: 10px; }
+    .data-grid.active { display: grid; }
 
     .data-item {
-      background: #f8faf8;
-      padding: 14px;
+      background: #f8fafc;
+      padding: 13px;
       border-radius: 10px;
-      border-left: 3px solid #2d8f4a;
+      border-left: 3px solid var(--accent);
     }
 
-    .data-item-title {
-      font-weight: 600;
-      color: #333;
-      margin-bottom: 6px;
-      font-size: 0.9rem;
-    }
+    .data-item-title { font-weight: 600; color: #333; margin-bottom: 4px; font-size: .87rem; }
+    .data-item-content { font-size: .82rem; color: #777; }
 
-    .data-item-content {
-      font-size: 0.85rem;
-      color: #666;
-    }
-
-    .btn-secondary {
-      margin-top: 20px;
-      background: #f5f5f5;
-      color: #333;
-      border: 2px solid #e0e0e0;
-    }
-
-    .btn-secondary:hover {
-      background: #e8e8e8;
-      box-shadow: none;
-      transform: none;
-    }
-
+    /* Footer */
     .footer {
       text-align: center;
-      color: rgba(255,255,255,0.8);
-      margin-top: 30px;
-      font-size: 0.85rem;
+      color: #999;
+      margin-top: 24px;
+      font-size: .8rem;
+      line-height: 1.6;
     }
 
-    .footer a {
-      color: white;
-      text-decoration: underline;
-    }
+    .footer a { color: var(--primary); text-decoration: underline; }
 
-    .error {
-      background: #ffebee;
-      color: #c62828;
-      padding: 16px;
-      border-radius: 10px;
-      margin-bottom: 20px;
-      display: none;
-    }
-
-    .error.active {
-      display: block;
-    }
-
+    /* Responsive */
     @media (max-width: 600px) {
-      .header h1 {
-        font-size: 1.5rem;
-      }
-
-      .tabs {
-        flex-direction: column;
-      }
-
-      .card {
-        padding: 16px;
-      }
+      body { padding: 8px 10px 24px; }
+      .hero h1 { font-size: 1.25rem; }
+      .tabs { flex-direction: column; }
+      .card { padding: 18px; }
     }
   </style>
 </head>
 <body>
   <div class="container">
-    <div class="header">
+    <div class="hero">
       <h1>🌾 NeoBi Karar Destek Sistemi</h1>
       <p>Yapay zeka destekli tarımsal analiz ve karar kartları</p>
     </div>
 
     <div class="card">
-      <div class="card-title">📊 Analiz Türü Seçin</div>
-      
+      <div class="card-title">📋 Analiz Türü Seçin</div>
+
       <div class="tabs">
-        <button class="tab active" data-tip="il" onclick="selectTab('il')">
-          🏙️ İl Bazlı Analiz
-        </button>
-        <button class="tab" data-tip="urun" onclick="selectTab('urun')">
-          🌽 Ürün Bazlı Analiz
-        </button>
+        <button class="tab active" data-tip="il" onclick="selectTab('il')">🏙️ İl Bazlı Analiz</button>
+        <button class="tab" data-tip="urun" onclick="selectTab('urun')">🌽 Ürün Bazlı Analiz</button>
       </div>
 
       <div class="form-group" id="ilGroup">
         <label for="ilSelect">İl Seçin</label>
-        <select id="ilSelect">
-          <option value="">Yükleniyor...</option>
-        </select>
+        <select id="ilSelect"><option value="">Yükleniyor...</option></select>
       </div>
 
-      <div class="form-group" id="urunGroup" style="display: none;">
+      <div class="form-group" id="urunGroup" style="display:none;">
         <label for="urunSelect">Ürün Seçin</label>
-        <select id="urunSelect">
-          <option value="">Yükleniyor...</option>
-        </select>
+        <select id="urunSelect"><option value="">Yükleniyor...</option></select>
       </div>
 
-      <button class="btn" id="analyzeBtn" onclick="analyze()">
-        🔍 Analiz Et
-      </button>
+      <button class="btn" id="analyzeBtn" onclick="analyze()">🔍 Analiz Et</button>
     </div>
 
-    <div class="error" id="errorBox"></div>
+    <div class="error-box" id="errorBox"></div>
 
     <div class="card loading" id="loadingBox">
       <div class="spinner"></div>
       <p>Yapay zeka analiz üretiyor...</p>
-      <p style="font-size: 0.85rem; color: #999; margin-top: 8px;">Bu işlem 10-30 saniye sürebilir</p>
+      <p class="muted">Bu işlem 10-30 saniye sürebilir</p>
     </div>
 
     <div class="card result" id="resultBox">
@@ -396,89 +345,54 @@
       <div class="analysis-content" id="analysisContent"></div>
 
       <div class="data-section">
-        <div class="data-title" onclick="toggleData()">
-          📋 Ham Verileri Göster ▼
-        </div>
+        <div class="data-toggle" onclick="toggleData()">📋 Ham Verileri Göster ▼</div>
         <div class="data-grid" id="dataGrid"></div>
       </div>
 
-      <button class="btn btn-secondary" onclick="resetForm()">
-        ← Yeni Analiz Yap
-      </button>
+      <button class="btn btn-secondary" onclick="resetForm()">← Yeni Analiz Yap</button>
     </div>
 
     <div class="footer">
-      <p>Veri Kaynağı: TÜİK (2014-2024) • <a href="index.html">Chatbot'a Dön</a></p>
-      <p style="margin-top: 8px;">⚠️ Bu analizler yapay zeka tarafından üretilmektedir. Karar vermeden önce verileri doğrulayın.</p>
+      Veri Kaynağı: TÜİK (2014-2024) • <a href="index.html">Chatbot'a Dön</a><br>
+      ⚠️ Bu analizler yapay zeka tarafından üretilmektedir. Karar vermeden önce verileri doğrulayın.
     </div>
   </div>
 
   <script>
     const API_URL = '/api/apichat2';
     let currentTip = 'il';
-    let iller = [];
-    let urunler = [];
 
-    // Sayfa yüklendiğinde listeleri getir
     document.addEventListener('DOMContentLoaded', () => {
-      loadIller();
-      loadUrunler();
+      loadList('iller', 'ilSelect', 'İl');
+      loadList('urunler', 'urunSelect', 'Ürün');
     });
 
-    async function loadIller() {
+    async function loadList(action, selectId, label) {
       try {
-        const res = await fetch(`${API_URL}?action=iller`);
+        const res = await fetch(`${API_URL}?action=${action}`);
         const data = await res.json();
         if (data.success) {
-          iller = data.data;
-          const select = document.getElementById('ilSelect');
-          select.innerHTML = '<option value="">-- İl Seçin --</option>' + 
-            iller.map(il => `<option value="${il}">${il}</option>`).join('');
+          const sel = document.getElementById(selectId);
+          sel.innerHTML = `<option value="">-- ${label} Seçin --</option>` +
+            data.data.map(item => `<option value="${item}">${item}</option>`).join('');
         }
-      } catch (e) {
-        console.error('İller yüklenemedi:', e);
-      }
-    }
-
-    async function loadUrunler() {
-      try {
-        const res = await fetch(`${API_URL}?action=urunler`);
-        const data = await res.json();
-        if (data.success) {
-          urunler = data.data;
-          const select = document.getElementById('urunSelect');
-          select.innerHTML = '<option value="">-- Ürün Seçin --</option>' + 
-            urunler.map(u => `<option value="${u}">${u}</option>`).join('');
-        }
-      } catch (e) {
-        console.error('Ürünler yüklenemedi:', e);
-      }
+      } catch(e) { console.error(`${label} yüklenemedi:`, e); }
     }
 
     function selectTab(tip) {
       currentTip = tip;
-      
-      // Tab stilini güncelle
-      document.querySelectorAll('.tab').forEach(tab => {
-        tab.classList.toggle('active', tab.dataset.tip === tip);
-      });
-
-      // Form alanlarını göster/gizle
+      document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tip === tip));
       document.getElementById('ilGroup').style.display = tip === 'il' ? 'block' : 'none';
       document.getElementById('urunGroup').style.display = tip === 'urun' ? 'block' : 'none';
     }
 
     async function analyze() {
-      const secim = currentTip === 'il' 
-        ? document.getElementById('ilSelect').value 
+      const secim = currentTip === 'il'
+        ? document.getElementById('ilSelect').value
         : document.getElementById('urunSelect').value;
 
-      if (!secim) {
-        showError(currentTip === 'il' ? 'Lütfen bir il seçin' : 'Lütfen bir ürün seçin');
-        return;
-      }
+      if (!secim) { showError(currentTip === 'il' ? 'Lütfen bir il seçin' : 'Lütfen bir ürün seçin'); return; }
 
-      // UI güncelle
       hideError();
       document.getElementById('resultBox').classList.remove('active');
       document.getElementById('loadingBox').classList.add('active');
@@ -488,17 +402,11 @@
         const res = await fetch(API_URL, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ tip: currentTip, secim: secim })
+          body: JSON.stringify({ tip: currentTip, secim })
         });
-
         const data = await res.json();
-
-        if (data.success) {
-          showResult(data);
-        } else {
-          showError(data.error || 'Analiz oluşturulamadı');
-        }
-      } catch (e) {
+        data.success ? showResult(data) : showError(data.error || 'Analiz oluşturulamadı');
+      } catch(e) {
         showError('Bağlantı hatası: ' + e.message);
       } finally {
         document.getElementById('loadingBox').classList.remove('active');
@@ -507,70 +415,48 @@
     }
 
     function showResult(data) {
-      // Başlık
-      document.getElementById('resultTitle').textContent = 
+      document.getElementById('resultTitle').textContent =
         `${data.secim} ${data.tip === 'il' ? 'İli' : 'Ürünü'} Analizi`;
-      document.getElementById('resultBadge').textContent = 
+      document.getElementById('resultBadge').textContent =
         data.tip === 'il' ? 'İl Analizi' : 'Ürün Analizi';
+      document.getElementById('analysisContent').innerHTML = mdToHtml(data.analiz);
 
-      // Analiz içeriği - Markdown'ı HTML'e çevir
-      const analysisHtml = markdownToHtml(data.analiz);
-      document.getElementById('analysisContent').innerHTML = analysisHtml;
-
-      // Ham veriler
-      const dataGrid = document.getElementById('dataGrid');
-      dataGrid.innerHTML = data.veriler.map(v => `
-        <div class="data-item">
-          <div class="data-item-title">${v.soru}</div>
-          <div class="data-item-content">${formatData(v.sonuc)}</div>
-        </div>
-      `).join('');
-
-      // Göster
+      if (data.veriler) {
+        document.getElementById('dataGrid').innerHTML = data.veriler.map(v => `
+          <div class="data-item">
+            <div class="data-item-title">${v.soru}</div>
+            <div class="data-item-content">${fmtData(v.sonuc)}</div>
+          </div>
+        `).join('');
+      }
       document.getElementById('resultBox').classList.add('active');
     }
 
-    function markdownToHtml(md) {
+    function mdToHtml(md) {
       return md
         .replace(/^### (.*$)/gim, '<h3>$1</h3>')
         .replace(/^## (.*$)/gim, '<h2>$1</h2>')
         .replace(/^# (.*$)/gim, '<h1>$1</h1>')
         .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
         .replace(/\*(.*?)\*/g, '<em>$1</em>')
-        .replace(/^\- (.*$)/gim, '<li>$1</li>')
+        .replace(/^- (.*$)/gim, '<li>$1</li>')
         .replace(/^\d+\. (.*$)/gim, '<li>$1</li>')
         .replace(/\n\n/g, '</p><p>')
         .replace(/\n/g, '<br>')
-        .replace(/^/, '<p>')
-        .replace(/$/, '</p>');
+        .replace(/^/, '<p>').replace(/$/, '</p>');
     }
 
-    function formatData(sonuc) {
-      if (!sonuc.success) return `Hata: ${sonuc.error}`;
-      if (!sonuc.data || sonuc.data.length === 0) return 'Veri yok';
-      
-      // İlk 3 satırı göster
-      return sonuc.data.slice(0, 3).map(row => {
-        return Object.entries(row)
-          .map(([k, v]) => `${k}: ${typeof v === 'number' ? v.toLocaleString('tr-TR') : v}`)
-          .join(', ');
-      }).join(' | ');
+    function fmtData(s) {
+      if (!s || !s.success) return `Hata: ${s?.error || 'Bilinmeyen'}`;
+      if (!s.data || !s.data.length) return 'Veri yok';
+      return s.data.slice(0,3).map(r =>
+        Object.entries(r).map(([k,v]) => `${k}: ${typeof v==='number'?v.toLocaleString('tr-TR'):v}`).join(', ')
+      ).join(' | ');
     }
 
-    function toggleData() {
-      const dataGrid = document.getElementById('dataGrid');
-      dataGrid.classList.toggle('active');
-    }
-
-    function showError(message) {
-      const errorBox = document.getElementById('errorBox');
-      errorBox.textContent = message;
-      errorBox.classList.add('active');
-    }
-
-    function hideError() {
-      document.getElementById('errorBox').classList.remove('active');
-    }
+    function toggleData() { document.getElementById('dataGrid').classList.toggle('active'); }
+    function showError(m) { const e=document.getElementById('errorBox'); e.textContent=m; e.classList.add('active'); }
+    function hideError() { document.getElementById('errorBox').classList.remove('active'); }
 
     function resetForm() {
       document.getElementById('resultBox').classList.remove('active');
