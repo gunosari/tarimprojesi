@@ -268,26 +268,34 @@ KARAR KARTI FORMATI:
 ${tip === 'il' ? `Her ürün grubu (Meyve, Sebze, Tahıl) için şu formatta bir cümle yaz:
    "Türkiye'de ${maxYil} yılında [ürün grubu] üretimi [TR toplam] ton iken ${secim} üretimi [il toplam] ton olup Türkiye üretimine katkısı %[pay] ile [sıra]. sıradadır."
    Sıralama bilgisini karıştırma: ürün grubu sıralaması ile toplam üretim sıralamasını ayrı ayrı belirt.
-   Sonra 1-2 cümle genel değerlendirme ekle.` 
+   Son olarak ilin stratejik konumunu özetleyen tek bir sentez cümlesi yaz. Örnek format:
+   "${secim}, Türkiye tarımında [güçlü olduğu alan]da uzmanlaşmış; [zayıf olduğu alan] açısından ise stratejik değil, tamamlayıcı bir il konumundadır."` 
 : `Bu ürünün Türkiye genelindeki durumu, üretim trendi ve yoğunlaşma analizi ile 2-3 cümle özet yaz.`}
 
 2. **Güçlü Yönler** (3 madde, her maddede veriden somut rakam kullan)
+   - Ürün çeşitliliği yüksekse şunu belirt: "Yüksek ürün çeşitliliği, iklim ve piyasa şoklarına karşı dayanıklılık sağlamaktadır."
 
-3. **Zayıf Yönler / Riskler** (3 madde, her maddede veriden somut rakam kullan)
+3. **Zayıf Yönler / Riskler** (3 madde, her birini tipine göre etiketle)
+   - 🔴 Yapısal risk: Uzun vadeli, kolay değişmez (ekim alanı daralması, altyapı eksikliği)
+   - 🟡 Sektörel risk: Belirli ürünlerdeki düşüş (domates, karpuz vb.)
+   - 🟠 Konjonktürel risk: Geçici dalgalanma (yıllık üretim düşüşü, iklim etkisi)
 
 4. **Trend Analizi**
    - Yön: Yükseliş / Düşüş / Durağan / Dalgalı
    - Son yıl değişiminin geçici mi yapısal mı olduğunu değerlendir
-   - Ekim alanı ile üretim arasındaki ilişkiyi yorumla (alan daralıyor ama üretim artıyorsa verim artışı var, ikisi birlikte düşüyorsa yapısal sorun var)
+   - Ekim alanı ile üretim arasındaki ilişkiyi yorumla:
+     * Alan daralıyor + üretim stabil = verim artışıyla dengeleniyor ama kırılgan
+     * Alan ve üretim birlikte düşüyor = yapısal sorun
+     * Alan stabil + üretim artıyor = sağlıklı büyüme
 
 5. **Önerilen Aksiyonlar** - Rol bazlı ayır:
-   - 🏛️ Bakanlık / Politika yapıcı için: (1-2 öneri)
-   - 🏢 İl Müdürlüğü / Kalkınma Ajansı için: (1-2 öneri)
-   - 🌾 Üretici / Yatırımcı için: (1-2 öneri)
+   - 🏛️ Bakanlık / Politika yapıcı için: (1-2 öneri, biri koruyucu biri gelir artırıcı)
+   - 🏢 İl Müdürlüğü / Kalkınma Ajansı için: (1-2 öneri, izleme ve pilot çözüm odaklı)
+   - 🌾 Üretici / Yatırımcı için: (1-2 öneri, risk iştahına uygun)
 
 6. **Risk Seviyesi**
    - Düşük / Orta / Yüksek
-   - Bir satır gerekçe yaz. Örnek: "Alan daralması + iklim oynaklığı → ORTA"
+   - Bir satır gerekçe yaz. Örnek: "Ekim alanı daralması + ana ürünlerde üretim düşüşü → ORTA"
 
 7. **Güven Düzeyi** (%70-%95 arası, veri kalitesine göre)
 
@@ -297,7 +305,8 @@ ${tip === 'il' ? `Her ürün grubu (Meyve, Sebze, Tahıl) için şu formatta bir
 - Üretim miktarlarını ton olarak belirt, büyük sayılarda "milyon ton" veya "bin ton" kullan
 - Veri yılı: ${maxYil}
 - Verideki rakamları olduğu gibi kullan, kendi hesaplama yapma
-- Yüzde ve sıralama bilgilerini veride nasıl geçiyorsa öyle yaz`;
+- Yüzde ve sıralama bilgilerini veride nasıl geçiyorsa öyle yaz
+- Bu bir chatbot yazısı değil, bir karar belgesidir. Kurumsal ve profesyonel dil kullan.`;
 
   const response = await anthropic.messages.create({
     model: MODEL,
