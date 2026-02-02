@@ -337,6 +337,7 @@ ${tip === 'il' ? `Her ürün grubu (Meyve, Sebze, Tahıl) için şu formatta bir
    Dil: "Bu risklerin birlikte gerçekleşmesi durumunda..."
 
    SENARYO YAZIM KURALLARI:
+   - Bölüm başına şu cümleyi ekle: "Senaryolar, mevcut eğilimler ve veriye dayalı varsayımlar üzerinden üretilmiş olup, politika ve yatırım kararları için yol gösterici niteliktedir."
    - Kesinlik iddiası KULLANMA. Tüm senaryolar koşullu ifadelerle yazılmalı.
    - Senaryolar mevcut veriden türetilmeli, dış varsayım eklenmemeli.
    - Her senaryoda somut üretim/alan rakamı ver (yaklaşık değer olarak).
@@ -346,6 +347,7 @@ ${tip === 'il' ? `Her ürün grubu (Meyve, Sebze, Tahıl) için şu formatta bir
 - Yanıtını Türkçe ver
 - Sayısal verileri kullan, genel konuşma yapma
 - Üretim miktarlarını ton olarak belirt, büyük sayılarda "milyon ton" veya "bin ton" kullan
+- Yüzde değerlerini tutarlı formatta yaz: %1, %2, %12,8 (ondalıklı ise virgül kullan)
 - Veri yılı: ${maxYil}
 - Verideki rakamları olduğu gibi kullan, kendi hesaplama yapma
 - Yüzde ve sıralama bilgilerini veride nasıl geçiyorsa öyle yaz
