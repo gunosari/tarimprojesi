@@ -90,11 +90,12 @@ function getIlSorulari(Y) {
     },
     { 
       id: 3, 
-      soru: `${Y} yılında ürün grubu bazlı üretim dağılımı ve payı nasıl?`, 
+      soru: `${Y} yılında ürün grubu bazlı üretim ve Türkiye'deki payı`, 
       sql: `SELECT "Ürün Grubu", SUM("Üretim") as uretim, SUM("Alan") as alan,
-            ROUND(SUM("Üretim") * 100.0 / (SELECT SUM("Üretim") FROM kds WHERE "İl" = ? AND "Yıl" = ?), 1) as pay_yuzde
-            FROM kds WHERE "İl" = ? AND "Yıl" = ? GROUP BY "Ürün Grubu" ORDER BY uretim DESC`,
-      params: (secim) => [secim, Y, secim, Y]
+            ROUND(SUM("Üretim") * 100.0 / (SELECT SUM("Üretim") FROM kds WHERE "İl" = ? AND "Yıl" = ?), 1) as il_ici_pay,
+            ROUND(SUM("Üretim") * 100.0 / (SELECT SUM("Üretim") FROM kds WHERE "Ürün Grubu" = k."Ürün Grubu" AND "Yıl" = ?), 1) as turkiye_payi
+            FROM kds k WHERE "İl" = ? AND "Yıl" = ? GROUP BY "Ürün Grubu" ORDER BY uretim DESC`,
+      params: (secim) => [secim, Y, Y, secim, Y]
     },
     { 
       id: 4, 
