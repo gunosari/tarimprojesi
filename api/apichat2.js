@@ -90,12 +90,24 @@ function getIlSorulari(Y) {
     },
     { 
       id: 3, 
-      soru: `${Y} yılında ürün grubu bazlı üretim ve Türkiye'deki payı`, 
-      sql: `SELECT "Ürün Grubu", SUM("Üretim") as uretim, SUM("Alan") as alan,
-            ROUND(SUM("Üretim") * 100.0 / (SELECT SUM("Üretim") FROM kds WHERE "İl" = ? AND "Yıl" = ?), 1) as il_ici_pay,
-            ROUND(SUM("Üretim") * 100.0 / (SELECT SUM("Üretim") FROM kds WHERE "Ürün Grubu" = k."Ürün Grubu" AND "Yıl" = ?), 1) as turkiye_payi
-            FROM kds k WHERE "İl" = ? AND "Yıl" = ? GROUP BY "Ürün Grubu" ORDER BY uretim DESC`,
-      params: (secim) => [secim, Y, Y, secim, Y]
+      soru: `${Y} yılında ürün grubu bazlı üretim, Türkiye toplamı, pay ve Türkiye sıralaması`, 
+      sql: `SELECT g."Ürün Grubu", g.il_uretim, g.tr_uretim, g.turkiye_payi, g.sira FROM (
+            SELECT sub."Ürün Grubu", sub.il_uretim, sub.tr_uretim, sub.turkiye_payi,
+              (SELECT COUNT(*) + 1 FROM (
+                SELECT "İl", SUM("Üretim") as t FROM kds 
+                WHERE "Ürün Grubu" = sub."Ürün Grubu" AND "Yıl" = ? 
+                GROUP BY "İl" HAVING t > sub.il_uretim
+              )) as sira
+            FROM (
+              SELECT k."Ürün Grubu",
+                SUM(k."Üretim") as il_uretim,
+                (SELECT SUM("Üretim") FROM kds WHERE "Ürün Grubu" = k."Ürün Grubu" AND "Yıl" = ?) as tr_uretim,
+                ROUND(SUM(k."Üretim") * 100.0 / (SELECT SUM("Üretim") FROM kds WHERE "Ürün Grubu" = k."Ürün Grubu" AND "Yıl" = ?), 1) as turkiye_payi
+              FROM kds k WHERE k."İl" = ? AND k."Yıl" = ? 
+              GROUP BY k."Ürün Grubu"
+            ) sub
+          ) g ORDER BY g.il_uretim DESC`,
+      params: (secim) => [Y, Y, Y, secim, Y]
     },
     { 
       id: 4, 
@@ -251,7 +263,9 @@ Aşağıdaki verilere dayanarak KARAR KARTI formatında analiz yap:
 ${dataContext}
 
 KARAR KARTI FORMATI:
-1. **Genel Değerlendirme** (2-3 cümle özet)
+1. **Genel Değerlendirme** - Her ürün grubu (Meyve, Sebze, Tahıl) için şu formatta bir cümle yaz:
+   "Türkiye'de ${maxYil} yılında [ürün grubu] üretimi [TR toplam] ton iken [İl] üretimi [il toplam] ton olup Türkiye üretimine katkısı %[pay] ile [sıra]. sıradadır."
+   Sonra 1-2 cümle genel değerlendirme ekle.
 2. **Güçlü Yönler** (3 madde)
 3. **Zayıf Yönler / Riskler** (3 madde)
 4. **Trend Analizi** (Yükseliş/Düşüş/Durağan + açıklama)
@@ -262,10 +276,10 @@ KARAR KARTI FORMATI:
 ÖNEMLİ:
 - Yanıtını Türkçe ver
 - Sayısal verileri kullan, genel konuşma yapma
-- Üretim miktarlarını ton olarak belirt
-- Verim değerlerini kg/dekar olarak belirt
+- Üretim miktarlarını ton olarak belirt, büyük sayılarda "milyon ton" veya "bin ton" kullan
 - Veri yılı: ${maxYil}
-- Verideki rakamları olduğu gibi kullan, kendi hesaplama yapma`;
+- Verideki rakamları olduğu gibi kullan, kendi hesaplama yapma
+- Yüzde ve sıralama bilgilerini veride nasıl geçiyorsa öyle yaz`;
 
   const response = await anthropic.messages.create({
     model: MODEL,
