@@ -289,9 +289,25 @@ ${tip === 'il' ? `Her ürün grubu (Meyve, Sebze, Tahıl) için şu formatta bir
      * Alan stabil + üretim artıyor = sağlıklı büyüme
 
 5. **Önerilen Aksiyonlar** - Rol bazlı ayır:
-   - 🏛️ Bakanlık / Politika yapıcı için: (1-2 öneri, biri koruyucu biri gelir artırıcı)
-   - 🏢 İl Müdürlüğü / Kalkınma Ajansı için: (1-2 öneri, izleme ve pilot çözüm odaklı)
-   - 🌾 Üretici / Yatırımcı için: (1-2 öneri, risk iştahına uygun)
+   - 🏛️ Bakanlık / Politika yapıcı için: (1-2 öneri)
+   - 🏢 İl Müdürlüğü / Kalkınma Ajansı için: (1-2 öneri)
+   - 🌾 Üretici / Yatırımcı için: (1-2 öneri)
+
+   AKSİYON YAZIM KURALLARI (bu kurallar kesindir, her çalıştırmada aynı mantığı uygula):
+   
+   📉 Üretimi AZALAN ürünler için yalnızca:
+      → Neden analizi, yapısal sorun tespiti, önleyici tedbirler, alternatif ürüne geçiş
+      ❌ Asla: kapasite artırımı, yatırım çağrısı
+   
+   📈 Üretimi ARTAN ürünler için yalnızca:
+      → Kapasite artışı, yatırım fırsatı, ihracat/pazar geliştirme, değer zinciri (soğuk hava, lojistik)
+      ❌ Asla: sorun odaklı dil, risk büyütme
+   
+   👑 Lider/doygun konumdaki ürünler için yalnızca:
+      → Korumaya dönük politika, verimlilik artışı, katma değer, ihracat/markalaşma
+      ❌ Asla: alan genişletme çağrısı, agresif yatırım dili
+   
+   Aynı ürün için çelişkili aksiyon türleri kullanma. Aksiyon dili her çalıştırmada aynı mantığı korumalı.
 
 6. **Risk Seviyesi**
    - Düşük / Orta / Yüksek
