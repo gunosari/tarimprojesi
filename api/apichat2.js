@@ -1,5 +1,5 @@
 // api/apichat2.js — NeoBi Karar Destek Sistemi API (Claude API)
-// v2.1 — system/user ayrımı, safeJson, WASM lokal, whitelist, IP parse
+// v2.2 — origin allowlist (maliyet kalkanı), rateLimit bellek temizliği
 export const config = { runtime: 'nodejs', maxDuration: 60 };
 
 import fs from 'fs';
@@ -11,6 +11,12 @@ import Anthropic from '@anthropic-ai/sdk';
 const DB_FILE = 'kds_vt.db';
 const MODEL = 'claude-sonnet-4-20250514';
 const MAX_TOKENS = 5000;
+// Sadece bu kaynaklar API'yi çağırabilir — '*' kaldırıldı, Claude maliyeti kötüye kullanıma kapalı
+const ALLOWED_ORIGINS = [
+  'https://tarim.emomonsdijital.com',   // chatbot/karar.html buradan açılıyor — asıl çağıran
+  'https://tarimprojesi.vercel.app',    // doğrudan vercel erişimi
+  'http://localhost:3000'               // lokal geliştirme
+];
 
 /** ======= ANALYSIS CACHE (in-memory, 24h TTL) ======= */
 const analysisCache = new Map();
@@ -56,11 +62,19 @@ function getClientIP(req) {
 
 function checkRateLimit(ip) {
   const now = Date.now();
-  const requests = rateLimitMap.get(ip) || [];
-  const recentRequests = requests.filter(time => now - time < RATE_LIMIT_WINDOW);
-  if (recentRequests.length >= RATE_LIMIT_MAX) return false;
-  recentRequests.push(now);
-  rateLimitMap.set(ip, recentRequests);
+  const requests = (rateLimitMap.get(ip) || []).filter(t => now - t < RATE_LIMIT_WINDOW);
+  if (requests.length >= RATE_LIMIT_MAX) {
+    rateLimitMap.set(ip, requests);
+    return false;
+  }
+  requests.push(now);
+  rateLimitMap.set(ip, requests);
+  // Bellek sızıntısı önlemi: map büyüdüyse penceresi geçmiş eski IP kayıtlarını sil
+  if (rateLimitMap.size > 500) {
+    for (const [k, t] of rateLimitMap) {
+      if (now - t[t.length - 1] > RATE_LIMIT_WINDOW) rateLimitMap.delete(k);
+    }
+  }
   return true;
 }
 
@@ -403,7 +417,9 @@ function getUrunler(db) {
 
 /** ======= MAIN HANDLER ======= */
 export default async function handler(req, res) {
-  res.setHeader('Access-Control-Allow-Origin', '*');
+  // CORS — sadece allowlist'teki kaynaklara izin ver (maliyet kalkanı)
+  const origin = req.headers.origin || '';
+  res.setHeader('Access-Control-Allow-Origin', ALLOWED_ORIGINS.includes(origin) ? origin : ALLOWED_ORIGINS[0]);
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
   
