@@ -1,500 +1,325 @@
-// api/chat.js — Türkiye Tarım Veritabanı Chatbot - Production Ready
+// api/chat.js — Türkiye Tarım Veritabanı Chatbot v2 (Production Ready)
+// Mimari: Soru -> LLM (alan çıkarımı: JSON) -> JS deterministik çözümleme -> şablon SQL -> SQLite
+// İki tablo: kds (il, 2014-2025)  |  kds_ilce (ilçe + örtüaltı, 2024-2025)
 export const config = { runtime: 'nodejs', maxDuration: 30 };
 import fs from 'fs';
 import path from 'path';
 import initSqlJs from 'sql.js';
 import OpenAI from 'openai';
 
-/** ======= CONFIG ======= **/
-const TABLE = 'urunler';
-const MODEL = process.env.OPENAI_MODEL || 'gpt-4o';
-const DEFAULT_YEAR = 2024;
-const DEBUG_MODE = true;
+/** ===================== CONFIG ===================== **/
+const DB_FILE = 'tarimdb.sqlite';          // public/ içinde
+const T_IL    = 'kds';                       // il düzeyi, 2014-2025
+const T_ILCE  = 'kds_ilce';                  // ilçe düzeyi, 2024-2025 (örtüaltı dahil)
+const MODEL   = process.env.OPENAI_MODEL || 'gpt-4o-mini';
+const DEBUG   = true;
 
-/** ======= RATE LIMITING ======= **/
-const rateLimitMap = new Map();
-const RATE_LIMIT_WINDOW = 60000;
-const RATE_LIMIT_MAX = 15;
+const ALLOWED_ORIGINS = [
+  'https://tarim.emomonsdijital.com',        // asıl çağıran (WordPress)
+  'https://tarimprojesi.vercel.app',         // doğrudan vercel
+  'http://localhost:3000'                    // geliştirme
+];
 
-function checkRateLimit(ip) {
-  const now = Date.now();
-  const requests = rateLimitMap.get(ip) || [];
-  const recentRequests = requests.filter(time => now - time < RATE_LIMIT_WINDOW);
- 
-  if (recentRequests.length >= RATE_LIMIT_MAX) {
-    return false;
-  }
- 
-  recentRequests.push(now);
-  rateLimitMap.set(ip, recentRequests);
- 
-  if (Math.random() < 0.01) {
-    for (const [key, value] of rateLimitMap.entries()) {
-      const filtered = value.filter(time => now - time < RATE_LIMIT_WINDOW);
-      if (filtered.length === 0) {
-        rateLimitMap.delete(key);
-      } else {
-        rateLimitMap.set(key, filtered);
-      }
-    }
-  }
- 
-  return true;
+/** ===================== TÜRKÇE-SAFE NORMALİZASYON ===================== **/
+// SQLite LOWER() Türkçe İ/I'yı çeviremez; tüm eşleştirmeyi JS'te yapıyoruz.
+function trLower(s) {
+  return String(s)
+    .replace(/İ/g, 'i').replace(/I/g, 'ı').replace(/Ş/g, 'ş')
+    .replace(/Ğ/g, 'ğ').replace(/Ü/g, 'ü').replace(/Ö/g, 'ö').replace(/Ç/g, 'ç')
+    .toLowerCase();
+}
+function norm(s) {
+  return trLower(s).replace(/[,.\/]/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
-/** ======= SIMPLE CACHE ======= **/
-const responseCache = new Map();
-const CACHE_TTL = 300000;
-const MAX_CACHE_SIZE = 100;
+/** ===================== DB YÜKLEME + WHITELIST (cold start'ta 1 kez) ===================== **/
+let DB = null, WL = null;   // WL = whitelist (iller, ilçeler, ürünler)
 
-function getCachedResponse(question) {
-  const key = question.toLowerCase().trim();
-  const cached = responseCache.get(key);
- 
-  if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
-    return cached.data;
-  }
- 
-  responseCache.delete(key);
-  return null;
-}
-
-function setCachedResponse(question, data) {
-  const key = question.toLowerCase().trim();
- 
-  if (responseCache.size >= MAX_CACHE_SIZE) {
-    const oldestKey = responseCache.keys().next().value;
-    responseCache.delete(oldestKey);
-  }
- 
-  responseCache.set(key, {
-    data: data,
-    timestamp: Date.now()
+async function getDB() {
+  if (DB) return DB;
+  const SQL = await initSqlJs({
+    locateFile: (f) => path.join(process.cwd(), 'node_modules/sql.js/dist', f)
   });
+  const dbPath = path.join(process.cwd(), 'public', DB_FILE);
+  if (!fs.existsSync(dbPath)) throw new Error('Veritabanı dosyası bulunamadı: ' + dbPath);
+  DB = new SQL.Database(fs.readFileSync(dbPath));
+  return DB;
 }
 
-/** ======= UTILS ======= **/
-function getSchema() {
-  return {
-    columns: ['il', 'ilce', 'urun_cesidi', 'urun_adi', 'yil', 'uretim_alani', 'uretim_miktari', 'verim'],
-    il: 'il',
-    ilce: 'ilce',
-    kategori: 'urun_cesidi',
-    urun: 'urun_adi',
-    yil: 'yil',
-    alan: 'uretim_alani',
-    uretim: 'uretim_miktari',
-    verim: 'verim'
-  };
+function queryAll(db, sql) {
+  const out = [];
+  const stmt = db.prepare(sql);
+  while (stmt.step()) out.push(stmt.getAsObject());
+  stmt.free();
+  return out;
 }
 
-function isSafeSQL(sql) {
-  const s = (sql || '').trim().toLowerCase();
-  if (!s.startsWith('select')) return false;
- 
-  const dangerous = ['drop', 'delete', 'update', 'insert', 'create', 'alter', 'exec', 'execute', '--', ';'];
-  return !dangerous.some(word => s.includes(word));
+// İl / ilçe / ürün whitelist'ini DB'den kur — uydurma isim imkânsız olur.
+function buildWhitelist(db) {
+  if (WL) return WL;
+  const iller = queryAll(db, `SELECT DISTINCT "İl" il FROM ${T_IL}`).map(r => r.il);
+  const ilceler = queryAll(db, `SELECT DISTINCT "İlçe" ilce, "İl" il FROM ${T_ILCE}`);
+  const urunIl = queryAll(db, `SELECT DISTINCT "Ürün" u FROM ${T_IL}`).map(r => r.u);
+  const urunIlce = queryAll(db, `SELECT DISTINCT "Ürün" u FROM ${T_ILCE}`).map(r => r.u);
+
+  const ilByNorm = {};   iller.forEach(i => ilByNorm[norm(i)] = i);
+  const ilceByNorm = {}; ilceler.forEach(r => { (ilceByNorm[norm(r.ilce)] ||= []).push(r.il); });
+  const urunByNorm = {}; [...new Set([...urunIl, ...urunIlce])].forEach(u => urunByNorm[norm(u)] = u);
+
+  WL = { iller, ilByNorm, ilceByNorm, urunByNorm,
+         urunIlSet: new Set(urunIl), urunIlceSet: new Set(urunIlce) };
+  return WL;
 }
 
-function formatNumber(num) {
-  return Number(num || 0).toLocaleString('tr-TR');
+/** ===================== ÜRÜN ALIAS TABLOSU (küratörlü) ===================== **/
+// Genel aile terimi -> kesin ürün listesi. Yanlış pozitifler (Yer Elması, Kara Buğday...) dışarıda.
+const ALIAS = {
+  'elma':    ['Elma Amasya','Elma Golden','Elma Granny Smith','Elma Starking','Diğer Elmalar'],
+  'domates': ['Domates Sofralık','Domates Salçalık'],
+  'buğday':  ['Durum Buğdayı','Buğday Durum Buğdayı Hariç'],
+  'üzüm':    ['Sofralık Üzüm Çekirdekli','Sofralık Üzüm Çekirdeksiz','Kurutmalık Üzüm Çekirdekli','Kurutmalık Üzüm Çekirdeksiz','Şaraplık Üzümler'],
+  'biber':   ['Biber Dolmalık','Biber Salçalık Kapya','Biber Sivri','Biber Kuru İşlenmemiş','Biber Çarliston'],
+  'patates': ['Patates Tatlı Patates Hariç'],
+  'mısır':   ['Mısır'],
+  'fasulye': ['Fasulye Kuru','Fasulye Taze'],
+  'soğan':   ['Soğan Kuru','Soğan Taze'],
+  'arpa':    ['Arpa Diğer','Arpa Biralık'],
+  'zeytin':  ['Sofralık Zeytinler'],   // yağlık adı kısalmış olabilir; fallback yakalar
+  'incir':   ['İncir Yaş']
+};
+// Fallback substring eşleşmesinde GENEL terim için asla katılmayacaklar:
+const HARIC = new Set([
+  'yer elması','trabzon hurması cennet elması','frenk üzümü','kara buğday','frenk inciri hint mısır inciri',
+  'tatlı patates','kuşdili bitkisi biberiye'
+].map(norm));
+
+// Kullanıcı terimini -> kesin ürün adları listesi (o tabloda var olanlarla sınırlı)
+function resolveUrun(term, tabloSet) {
+  if (!term) return [];
+  const n = norm(term);
+
+  // 1) Tam eşleşme (spesifik varyete: "elma golden", "durum buğdayı", "sofralık üzüm çekirdekli")
+  if (WL.urunByNorm[n] && tabloSet.has(WL.urunByNorm[n])) return [WL.urunByNorm[n]];
+
+  // 2) Alias (genel aile)
+  if (ALIAS[n]) return ALIAS[n].filter(u => tabloSet.has(u));
+
+  // 3) Fallback: substring eşleşmesi, yanlış pozitifler + artık-kategoriler hariç
+  const artik = /hariç|sınıflandırılmamış|familyası/;   // "Frenk İnciri Hariç", "Başka Yerde..." vb.
+  const hit = Object.entries(WL.urunByNorm)
+    .filter(([k, v]) => k.includes(n) && !HARIC.has(k) && !artik.test(k) && tabloSet.has(v))
+    .map(([, v]) => v);
+  return [...new Set(hit)];
 }
 
-function getClientIP(req) {
-  return req.headers['x-forwarded-for'] ||
-         req.headers['x-real-ip'] ||
-         req.connection?.remoteAddress ||
-         'unknown';
+// İl çözümle (typo toleranslı: tam -> normalize -> ilk 4 harf)
+function resolveIl(term) {
+  if (!term) return null;
+  const n = norm(term);
+  if (WL.ilByNorm[n]) return WL.ilByNorm[n];
+  const pref = Object.keys(WL.ilByNorm).find(k => k.startsWith(n.slice(0, 4)));
+  return pref ? WL.ilByNorm[pref] : null;
+}
+function resolveIlce(term) {
+  if (!term) return null;
+  const n = norm(term);
+  if (WL.ilceByNorm[n]) return { ilce: Object.keys(WL.ilceByNorm).find(k => k === n) ? term : term, raw: n };
+  return WL.ilceByNorm[n] ? n : (Object.keys(WL.ilceByNorm).find(k => k.startsWith(n.slice(0, 4))) || null);
 }
 
-/** ======= BİLGİ NOTU OLUŞTURMA (VERİM DÜZELTMELİ) ======= **/
-function createBilgiNotu(question, rows, sql) {
-  if (!question.toLowerCase().includes('bilgi notu')) {
-    return null;
+/** ===================== SQL ŞABLONLARI ===================== **/
+function inList(arr) { return arr.map(u => `'${u.replace(/'/g, "''")}'`).join(','); }
+
+function buildSQL(p) {
+  const { il, ilce, urunler, yil, yilStart, yilEnd, intent } = p;
+  const tablo = ilce ? T_ILCE : T_IL;
+  const ilceFiltre = ilce ? ` AND "İlçe"='${ilce.replace(/'/g, "''")}'` : '';
+  const ilFiltre = il ? ` AND "İl"='${il.replace(/'/g, "''")}'` : '';
+  const urunFiltre = urunler && urunler.length ? ` AND "Ürün" IN (${inList(urunler)})` : '';
+
+  // 1) SIRALAMA: "X ili Y üretiminde kaçıncı" / "en çok Y üreten il" -> CTE + ROW_NUMBER
+  if (intent === 'siralama') {
+    const base = `SELECT "İl" il, SUM("Üretim") tpl FROM ${T_IL}
+      WHERE "Yıl"=${yil}${urunFiltre} GROUP BY "İl"`;
+    const cte = `WITH s AS (${base}),
+      r AS (SELECT il, tpl, ROW_NUMBER() OVER (ORDER BY tpl DESC) sira FROM s)`;
+    if (il) return `${cte} SELECT il, tpl, sira FROM r WHERE il='${il.replace(/'/g, "''")}'`;
+    return `${cte} SELECT il, tpl, sira FROM r ORDER BY sira LIMIT 5`;   // "en çok"
   }
-  
-  // SQL'den il ve ürün bilgisini çıkar
-  const ilMatch = sql.match(/["']il["']\s*=\s*['"]([^'"]+)['"]/i) || 
-                  sql.match(/il\s*=\s*['"]([^'"]+)['"]/i);
-  const urunMatch = sql.match(/LIKE\s+['"]%([^%]+)%['"]/i) || 
-                    sql.match(/urun_adi['"]\s*LIKE\s+['"]%([^%]+)%['"]/i);
-  
-  const il = ilMatch ? ilMatch[1] : 'Türkiye';
-  const urun = urunMatch ? urunMatch[1] : 'Genel';
-  
-  // Veriden değerleri al
-  const toplam = rows[0]?.toplam_uretim || rows[0]?.uretim_miktari || 0;
-  const alan = rows[0]?.toplam_alan || rows[0]?.uretim_alani || 0;
-  
-  // Verim hesapla: Üretim(ton) / Alan(dekar) * 1000 = kg/dekar
-  let verim = 0;
-  if (alan > 0 && toplam > 0) {
-    verim = Math.round((toplam / alan) * 1000); // ton/dekar'ı kg/dekar'a çevir
-  } else if (rows[0]?.verim) {
-    verim = Math.round(rows[0].verim);
+
+  // 2) TREND: çok yıllı üretim (sadece il tablosu, 2014-2025)
+  if (intent === 'trend') {
+    return `SELECT "Yıl" yil, SUM("Üretim") tpl, SUM("Alan") alan
+      FROM ${T_IL} WHERE "Yıl" BETWEEN ${yilStart} AND ${yilEnd}${ilFiltre}${urunFiltre}
+      GROUP BY "Yıl" ORDER BY "Yıl"`;
   }
-  
-  // Tarih
-  const tarih = '06.01.2025';
-  
-  // Değerlendirme
-  let degerlendirme = '';
-  if (toplam > 1000000) {
-    degerlendirme = "Türkiye'nin en önemli üretim merkezlerinden biri";
-  } else if (toplam > 100000) {
-    degerlendirme = 'önemli bir üretim merkezi';
-  } else if (toplam > 10000) {
-    degerlendirme = 'orta ölçekli üretici';
-  } else {
-    degerlendirme = 'yerel üretici konumunda';
+
+  // 3) ALAN
+  if (intent === 'alan') {
+    return `SELECT SUM("Alan") alan FROM ${tablo}
+      WHERE "Yıl"=${yil}${ilFiltre}${ilceFiltre}${urunFiltre}`;
   }
-  
-  // Temiz metin formatı
-  const bilgiNotu = `TARIM BILGI NOTU
-========================
 
-Tarih: ${tarih}
-Il: ${il}
-Urun: ${urun.charAt(0).toUpperCase() + urun.slice(1).toLowerCase()}
-
-TEMEL GOSTERGELER:
-- Uretim: ${formatNumber(Math.round(toplam))} ton
-- Alan: ${formatNumber(Math.round(alan))} dekar
-- Verim: ${verim} kg/dekar
-
-DEGERLENDIRME:
-${il} ili ${urun} uretiminde ${degerlendirme}.
-
-VERI KAYNAGI:
-- Yil: ${DEFAULT_YEAR}
-- Kaynak: TUIK
-
-------------------------
-NeoBi Tarim Istatistikleri
-www.tarim.emomonsdijital.com`;
-
-  return bilgiNotu;
+  // 4) ÜRETİM (varsayılan) — üretim + alan + verim
+  return `SELECT SUM("Üretim") uretim, SUM("Alan") alan,
+      CASE WHEN SUM("Alan")>0 THEN ROUND(CAST(SUM("Üretim") AS FLOAT)/SUM("Alan")*1000) ELSE 0 END verim
+      FROM ${tablo} WHERE "Yıl"=${yil}${ilFiltre}${ilceFiltre}${urunFiltre}`;
 }
 
-/** ======= GPT LAYER ======= **/
+/** ===================== LLM: SORU -> ALAN ÇIKARIMI (JSON) ===================== **/
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-async function nlToSQL(question, schema) {
-  if (!process.env.OPENAI_API_KEY) throw new Error('OpenAI API key eksik');
- 
-  const { il, ilce, urun, yil, uretim, alan, verim, kategori } = schema;
-  
-  // Bilgi notu için özel SQL
-  if (question.toLowerCase().includes('bilgi notu')) {
-    const words = question.split(' ');
-    let ilName = '';
-    let urunName = '';
-    
-    // İl ve ürün isimlerini bul
-    if (words.includes('Konya') || words.includes('konya')) {
-      ilName = 'Konya';
-    } else if (words.includes('Antalya') || words.includes('antalya')) {
-      ilName = 'Antalya';
-    } else if (words.includes('İzmir') || words.includes('izmir') || words.includes('İzmir')) {
-      ilName = 'İzmir';
-    } else if (words.includes('Mersin') || words.includes('mersin')) {
-      ilName = 'Mersin';
-    } else if (words.includes('Adana') || words.includes('adana')) {
-      ilName = 'Adana';
-    } else if (words.includes('Bursa') || words.includes('bursa')) {
-      ilName = 'Bursa';
-    }
-    
-    if (words.includes('buğday') || words.includes('bugday')) {
-      urunName = 'buğday';
-    } else if (words.includes('domates')) {
-      urunName = 'domates';
-    } else if (words.includes('üzüm') || words.includes('uzum')) {
-      urunName = 'üzüm';
-    } else if (words.includes('portakal')) {
-      urunName = 'portakal';
-    } else if (words.includes('elma')) {
-      urunName = 'elma';
-    } else if (words.includes('mısır') || words.includes('misir')) {
-      urunName = 'mısır';
-    }
-    
-    if (ilName && urunName) {
-      // Verim hesaplaması için düzeltilmiş SQL
-      return `SELECT 
-        "${il}" as il, 
-        SUM("${uretim}") as toplam_uretim, 
-        SUM("${alan}") as toplam_alan,
-        CASE 
-          WHEN SUM("${alan}") > 0 THEN ROUND(CAST(SUM("${uretim}") AS FLOAT) / SUM("${alan}") * 1000)
-          ELSE 0 
-        END as verim
-      FROM ${TABLE} 
-      WHERE "${il}"='${ilName}' 
-      AND LOWER("${urun}") LIKE '%${urunName}%' 
-      AND "${yil}"=${DEFAULT_YEAR} 
-      GROUP BY "${il}"`;
-    }
-  }
- 
-  const system = `Sen bir SQL uzmanısın. Türkiye tarım verileri için doğal dil sorgularını SQL'e çevir.
-TABLO: ${TABLE}
-KOLONLAR:
-- "${il}": İl adı (TEXT)
-- "${ilce}": İlçe adı (TEXT)
-- "${kategori}": Ürün kategorisi (Meyve/Sebze/Tahıl) (TEXT)
-- "${urun}": Ürün adı (TEXT)
-- "${yil}": Yıl (INTEGER, 2020-2024 arası)
-- "${alan}": Üretim alanı, dekar cinsinden (INTEGER)
-- "${uretim}": Üretim miktarı, ton cinsinden (INTEGER)
-- "${verim}": Verim, ton/dekar (INTEGER)
+async function extractFields(question, maxYil) {
+  const illerStr = WL.iller.join(', ');
+  const sys = `Türkiye tarım sorgularını JSON alanlara ayır. SADECE JSON döndür, açıklama yok.
+Alanlar:
+- "il": Soruda geçen il adı (yoksa null). Geçerli iller: ${illerStr}
+- "ilce": Soruda ilçe geçiyorsa adı (yoksa null). İlçe geçerse il düzeyi değil ilçe verisi kullanılır.
+- "urun": Ürün/ürün ailesi terimi, kullanıcının yazdığı sade haliyle (örn "elma","sofralık üzüm","durum buğdayı"). Yoksa null.
+- "ortualti": Soru sera/örtüaltı içeriyorsa true, değilse false.
+- "yil": Tek yıl geçiyorsa (örn 2023) o sayı; geçmiyorsa null.
+- "yilStart","yilEnd": Aralık/trend varsa (örn "son 5 yıl","2020-2024 arası") başlangıç ve bitiş; yoksa null.
+- "intent": "uretim" | "alan" | "siralama" | "trend".
+   * "kaçıncı","sıralama","en çok","lider" -> "siralama"
+   * "trend","yıllara göre","son N yıl","değişim","artış" -> "trend"
+   * "alan","kaç dekar","ekili alan" -> "alan"
+   * diğer hepsi -> "uretim"
+Kurallar: Yazım hatalarını düzelt (anakara->ankara, kaysı->kayısı). En güncel yıl ${maxYil}.
+Örnekler:
+Soru: "Mersin limon üretimi" -> {"il":"Mersin","ilce":null,"urun":"limon","ortualti":false,"yil":null,"yilStart":null,"yilEnd":null,"intent":"uretim"}
+Soru: "Tarsus'ta domates" -> {"il":"Mersin","ilce":"Tarsus","urun":"domates","ortualti":false,"yil":null,"yilStart":null,"yilEnd":null,"intent":"uretim"}
+Soru: "Afyonkarahisar buğday üretiminde kaçıncı sırada" -> {"il":"Afyonkarahisar","ilce":null,"urun":"buğday","ortualti":false,"yil":null,"yilStart":null,"yilEnd":null,"intent":"siralama"}
+Soru: "En çok elma üreten il" -> {"il":null,"ilce":null,"urun":"elma","ortualti":false,"yil":null,"yilStart":null,"yilEnd":null,"intent":"siralama"}
+Soru: "Antalya domates son 5 yıl trend" -> {"il":"Antalya","ilce":null,"urun":"domates","ortualti":false,"yil":null,"yilStart":${maxYil - 4},"yilEnd":${maxYil},"intent":"trend"}
+Soru: "Antalya örtüaltı domates" -> {"il":"Antalya","ilce":null,"urun":"domates","ortualti":true,"yil":null,"yilStart":null,"yilEnd":null,"intent":"uretim"}`;
 
-ÖNEMLİ: YAZIM HATALARINI OTOMATIK DÜZELT!
-- "kaysı" → "kayısı", "anakara" → "ankara", "domates" → "domates"
-- "adanna" → "adana", "mersinn" → "mersin", "izmirr" → "izmir"
-- İl/ürün isimlerindeki typo'ları düzelt
-
-KRİTİK KURALLAR:
-1. ÜRÜN EŞLEŞME:
-   - Yazım hatalarını düzelt: "kaysı" → "kayısı" olarak işle
-   - Tekli: "üzüm" → LOWER("${urun}") LIKE '%üzüm%' OR "${urun}" LIKE '%Üzüm%'
-   - Çoklu: "sofralık üzüm çekirdekli" → Her kelimeyi ayrı kontrol:
-     LOWER("${urun}") LIKE '%sofralık%' AND LOWER("${urun}") LIKE '%üzüm%' AND LOWER("${urun}") LIKE '%çekirdekli%'
-
-2. İL/İLÇE EŞLEŞME:
-   - Yazım hatalarını düzelt: "anakara" → "ankara" olarak işle
-   - "Mersin'de" → "${il}"='Mersin'
-   - "Tarsus'ta" → "${ilce}"='Tarsus'
-   - "Türkiye'de" → İl filtresi koyma
-
-3. YIL KURALI:
-   - Yıl yok → Otomatik ${DEFAULT_YEAR} eklenecek
-   - "2023'te" → "${yil}"=2023
-
-4. AGGREGATION:
-   - SUM() kullan, "en çok" → ORDER BY DESC
-
-5. SIRALAMA SORULARI:
-   - Soru "kaçıncı" içeriyorsa tüm illerin üretim toplamını hesapla
-
-6. BİLGİ NOTU İÇİN:
-   - Hem üretim hem alan hem verim değerlerini getir
-   - GROUP BY kullan
-
-ÖRNEKLER:
-Soru: "Konya buğday bilgi notu"
-SQL: SELECT "${il}" as il, SUM("${uretim}") as toplam_uretim, SUM("${alan}") as toplam_alan FROM ${TABLE} WHERE "${il}"='Konya' AND LOWER("${urun}") LIKE '%buğday%' AND "${yil}"=${DEFAULT_YEAR} GROUP BY "${il}"
-
-Soru: "Ankara elma üretimi"
-SQL: SELECT SUM("${uretim}") AS toplam_uretim FROM ${TABLE} WHERE "${il}"='Ankara' AND (LOWER("${urun}") LIKE '%elma%' OR "${urun}" LIKE '%Elma%')
-
-ÇIKTI: Sadece SELECT sorgusu, noktalama yok.`;
-
-  try {
-    const response = await openai.chat.completions.create({
-      model: MODEL,
-      messages: [
-        { role: 'system', content: system },
-        { role: 'user', content: `Soru: "${question}"\n\nSQL:` }
-      ],
-      temperature: 0,
-      max_tokens: 200
-    });
-   
-    let sql = (response.choices[0].message.content || '')
-      .replace(/```[\s\S]*?```/g, s => s.replace(/```(sql)?/g,'').trim())
-      .trim()
-      .replace(/;+\s*$/, '');
-   
-    return sql;
-  } catch (e) {
-    console.error('OpenAI hatası:', e.message);
-    throw new Error(`GPT servisi geçici olarak kullanılamıyor: ${e.message}`);
-  }
+  const resp = await openai.chat.completions.create({
+    model: MODEL,
+    messages: [{ role: 'system', content: sys }, { role: 'user', content: `Soru: "${question}"` }],
+    temperature: 0, max_tokens: 200, response_format: { type: 'json_object' }
+  });
+  return JSON.parse(resp.choices[0].message.content || '{}');
 }
 
-async function generateAnswer(question, rows, sql) {
-  // Önce bilgi notu kontrolü
-  const bilgiNotu = createBilgiNotu(question, rows, sql);
-  if (bilgiNotu) {
-    return bilgiNotu;
+/** ===================== CEVAP ÜRETİMİ ===================== **/
+function fmt(n) { return Number(n || 0).toLocaleString('tr-TR'); }
+
+function buildAnswer(p, rows) {
+  if (!rows || rows.length === 0) return 'Bu sorguya uygun veri bulunamadı.';
+  const yer = p.ilce ? `${p.ilce} (${p.il})` : (p.il || 'Türkiye');
+  const urunAd = p.urunEtiket || 'ürün';
+
+  if (p.intent === 'siralama') {
+    if (p.il && rows[0].sira) return `${rows[0].il}, ${p.yil} yılı ${urunAd} üretiminde ${rows[0].sira}. sırada (${fmt(rows[0].tpl)} ton).`;
+    const lst = rows.map((r, i) => `${i + 1}. ${r.il} (${fmt(r.tpl)} ton)`).join('\n');
+    return `${p.yil} yılı en çok ${urunAd} üreten iller:\n${lst}`;
   }
-  
-  if (!rows || rows.length === 0) {
-    return 'Bu sorguya uygun veri bulunamadı.';
+  if (p.intent === 'trend') {
+    const lst = rows.map(r => `${r.yil}: ${fmt(r.tpl)} ton`).join('\n');
+    return `${yer} ${urunAd} üretimi (${p.yilStart}-${p.yilEnd}):\n${lst}`;
   }
- 
-  if (question.toLowerCase().includes('kaçıncı') && rows.length === 1 && rows[0].siralama) {
-    const sira = rows[0].siralama;
-    return `${rows[0].il} ${sira}. sırada.`;
-  }
- 
-  if (rows.length === 1) {
-    const row = rows[0];
-    const keys = Object.keys(row);
-   
-    if (keys.length === 1) {
-      const [key, value] = Object.entries(row)[0];
-     
-      if (value === null || value === undefined || value === 0) {
-        return 'Bu sorguya uygun veri bulunamadı.';
-      }
-     
-      if (key.includes('alan')) {
-        return `${formatNumber(value)} dekar`;
-      } else if (key.includes('verim')) {
-        return `${formatNumber(value)} ton/dekar`;
-      } else if (key.includes('uretim') || key.includes('toplam')) {
-        return `${formatNumber(value)} ton`;
-      }
-      return formatNumber(value);
-    }
-  }
- 
-  if (process.env.OPENAI_API_KEY) {
-    try {
-      const response = await openai.chat.completions.create({
-        model: MODEL,
-        messages: [{
-          role: 'system',
-          content: 'Tarım verileri uzmanısın. Kısa Türkçe cevap ver. Sayıları binlik ayraçla yaz.'
-        }, {
-          role: 'user',
-          content: `Soru: ${question}\nVeri: ${JSON.stringify(rows.slice(0, 5))}`
-        }],
-        temperature: 0,
-        max_tokens: 100
-      });
-     
-      return response.choices[0].message.content?.trim() || 'Cevap oluşturulamadı.';
-    } catch (e) {
-      console.error('GPT cevap hatası:', e);
-      return `${rows.length} sonuç bulundu: ${JSON.stringify(rows[0])}`;
-    }
-  }
- 
-  return `${rows.length} sonuç bulundu.`;
+  if (p.intent === 'alan') return `${yer} ${p.yil} yılı ${urunAd} ekili alanı: ${fmt(rows[0].alan)} dekar.`;
+
+  const r = rows[0];
+  if (!r.uretim) return 'Bu sorguya uygun veri bulunamadı.';
+  return `${yer} ${p.yil} yılı ${urunAd} üretimi: ${fmt(r.uretim)} ton (alan ${fmt(r.alan)} dekar, verim ${fmt(r.verim)} kg/dekar).`;
 }
 
-/** ======= MAIN HANDLER ======= **/
+/** ===================== RATE LIMIT + CACHE ===================== **/
+const rl = new Map(); const RL_WIN = 60000, RL_MAX = 15;
+function rateOk(ip) {
+  const now = Date.now(); const a = (rl.get(ip) || []).filter(t => now - t < RL_WIN);
+  if (a.length >= RL_MAX) return false; a.push(now); rl.set(ip, a); return true;
+}
+const cache = new Map(); const TTL = 300000, CMAX = 100;
+const cKey = q => norm(q);
+function cGet(q) { const c = cache.get(cKey(q)); if (c && Date.now() - c.t < TTL) return c.d; cache.delete(cKey(q)); return null; }
+function cSet(q, d) { if (cache.size >= CMAX) cache.delete(cache.keys().next().value); cache.set(cKey(q), { d, t: Date.now() }); }
+
+/** ===================== MAIN HANDLER ===================== **/
 export default async function handler(req, res) {
-  const startTime = Date.now();
-  const clientIP = getClientIP(req);
- 
-  // CORS
-  res.setHeader('Access-Control-Allow-Origin', '*');
+  const t0 = Date.now();
+  const origin = req.headers.origin;
+  if (ALLOWED_ORIGINS.includes(origin)) res.setHeader('Access-Control-Allow-Origin', origin);
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
- 
-  if (req.method === 'OPTIONS') {
-    return res.status(200).end();
-  }
- 
-  if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Sadece POST metodu desteklenir' });
-  }
- 
-  if (!checkRateLimit(clientIP)) {
-    return res.status(429).json({
-      error: 'Çok fazla istek',
-      detail: 'Dakikada maksimum 15 soru sorabilirsiniz. Lütfen bekleyin.'
-    });
-  }
- 
+  if (req.method === 'OPTIONS') return res.status(200).end();
+  if (req.method !== 'POST') return res.status(405).json({ error: 'Sadece POST' });
+
+  const ip = req.headers['x-forwarded-for'] || req.headers['x-real-ip'] || 'unknown';
+  if (!rateOk(ip)) return res.status(429).json({ error: 'Dakikada en fazla 15 soru.' });
+
   try {
     const { question } = req.body || {};
-   
-    if (!question?.trim()) {
-      return res.status(400).json({ error: 'Soru parametresi gerekli' });
+    if (!question?.trim()) return res.status(400).json({ error: 'Soru gerekli' });
+
+    const hit = cGet(question);
+    if (hit) return res.status(200).json({ ...hit, cached: true, processingTime: Date.now() - t0 });
+
+    const db = await getDB();
+    buildWhitelist(db);
+
+    // Dinamik en güncel yıl
+    const maxYil = queryAll(db, `SELECT MAX("Yıl") y FROM ${T_IL}`)[0].y;
+
+    // 1) LLM alan çıkarımı
+    const f = await extractFields(question, maxYil);
+    if (DEBUG) console.log('LLM fields:', JSON.stringify(f));
+
+    // 2) Deterministik çözümleme
+    const il = resolveIl(f.il);
+    const ilce = f.ilce ? f.ilce : null;                 // ilçe adı varsa kds_ilce'ye gideriz
+    const yil = f.yil || (f.intent === 'trend' ? null : maxYil);
+    const yilStart = f.yilStart || (maxYil - 4);
+    const yilEnd = f.yilEnd || maxYil;
+
+    // Ürün çözümle — hedef tabloya göre (ilçe varsa kds_ilce ürün seti)
+    const hedefSet = ilce ? WL.urunIlceSet : WL.urunIlSet;
+    let urunler = resolveUrun(f.urun, hedefSet);
+    // Örtüaltı: ürün adlarını "Örtüaltı " önekine çevir, ilçe tablosuna yönlen
+    let useIlce = !!ilce;
+    if (f.ortualti) {
+      useIlce = true;
+      urunler = resolveUrun(f.urun, WL.urunIlceSet).map(u => 'Örtüaltı ' + u).filter(u => WL.urunIlceSet.has(u));
     }
-   
-    const cached = getCachedResponse(question);
-    if (cached) {
-      console.log(`[CACHE HIT] ${question}`);
-      return res.status(200).json({
-        ...cached,
-        cached: true,
-        processingTime: Date.now() - startTime
-      });
-    }
-   
-    console.log(`[${new Date().toISOString()}] IP: ${clientIP}, Soru: ${question}`);
-   
-    const SQL = await initSqlJs({
-      locateFile: (file) => path.join(process.cwd(), 'node_modules/sql.js/dist', file)
-    });
-   
-    const dbPath = path.join(process.cwd(), 'public', 'tarimdb.sqlite');
-    if (!fs.existsSync(dbPath)) {
-      throw new Error('Veritabanı dosyası bulunamadı');
-    }
-   
-    const dbBuffer = fs.readFileSync(dbPath);
-    const db = new SQL.Database(dbBuffer);
-   
-    let sql;
-    try {
-      sql = await nlToSQL(question, getSchema());
-      if (DEBUG_MODE) console.log('SQL:', sql);
-    } catch (e) {
-      return res.status(400).json({
-        error: 'Soru anlayılamadı',
-        detail: e.message
-      });
-    }
-   
-    if (!isSafeSQL(sql)) {
-      return res.status(400).json({ error: 'Güvenli olmayan sorgu' });
-    }
-   
-    let rows = [];
-    try {
-      const stmt = db.prepare(sql);
-      while (stmt.step()) {
-        rows.push(stmt.getAsObject());
-      }
-      stmt.free();
-      console.log(`Sonuç: ${rows.length} satır`);
-    } catch (e) {
-      console.error('SQL hatası:', e);
-      return res.status(400).json({
-        error: 'Sorgu çalıştırılamadı',
-        detail: 'Veritabanı sorgu hatası'
-      });
-    } finally {
-      db.close();
-    }
-   
-    const answer = await generateAnswer(question, rows, sql);
-   
-    // WhatsApp linki (bilgi notu için)
-    let whatsappLink = null;
-    if (question.toLowerCase().includes('bilgi notu')) {
-      const encodedText = encodeURIComponent(answer);
-      whatsappLink = `https://wa.me/?text=${encodedText}`;
-    }
-   
-    const response = {
-      success: true,
-      answer: answer,
-      data: rows.slice(0, 10),
-      totalRows: rows.length,
-      whatsappLink: whatsappLink,
-      isBilgiNotu: question.toLowerCase().includes('bilgi notu'),
-      processingTime: Date.now() - startTime,
-      debug: DEBUG_MODE ? { sql, sampleRows: rows.slice(0, 2) } : null
+
+    const p = {
+      il, ilce: useIlce ? (ilce || null) : null,
+      urunler, urunEtiket: f.urun || 'ürün',
+      yil, yilStart, yilEnd, intent: f.intent || 'uretim'
     };
-   
-    setCachedResponse(question, response);
-    
-    res.status(200).json(response);
-   
-  } catch (error) {
-    console.error('Genel hata:', error.message);
-    res.status(500).json({
-      error: 'Sunucu hatası',
-      detail: DEBUG_MODE ? error.message : 'Geçici bir sorun oluştu',
-      processingTime: Date.now() - startTime
-    });
+    // örtüaltı ilçe filtresiz, sadece il+örtüaltı ürün: ilce null ama tablo kds_ilce olmalı
+    if (f.ortualti && !ilce) { p._ortualtiIl = true; }
+
+    if (!urunler.length && f.urun)
+      return res.status(200).json({ success: true, answer: `"${f.urun}" için eşleşen ürün bulunamadı. Daha genel bir ad deneyin (örn "elma","domates").`, processingTime: Date.now() - t0 });
+
+    // 3) SQL kur — örtüaltı il-geneli özel durumu (ilçe tablosu ama ilçe filtresi yok)
+    let sql;
+    if (f.ortualti && !ilce) {
+      const urunFiltre = urunler.length ? ` AND "Ürün" IN (${inList(urunler)})` : '';
+      const ilFiltre = il ? ` AND "İl"='${il.replace(/'/g, "''")}'` : '';
+      sql = `SELECT SUM("Üretim") uretim, SUM("Alan") alan,
+        CASE WHEN SUM("Alan")>0 THEN ROUND(CAST(SUM("Üretim") AS FLOAT)/SUM("Alan")*1000) ELSE 0 END verim
+        FROM ${T_ILCE} WHERE "Yıl"=${yil}${ilFiltre}${urunFiltre}`;
+    } else {
+      sql = buildSQL(p);
+    }
+    if (DEBUG) console.log('SQL:', sql);
+
+    // 4) Çalıştır
+    let rows = [];
+    try { rows = queryAll(db, sql); }
+    catch (e) { console.error('SQL hatası:', e); return res.status(400).json({ error: 'Sorgu çalıştırılamadı', detail: DEBUG ? e.message : undefined }); }
+
+    const answer = buildAnswer(p, rows);
+    const out = { success: true, answer, data: rows.slice(0, 10), totalRows: rows.length,
+      processingTime: Date.now() - t0, debug: DEBUG ? { fields: f, sql, urunler } : null };
+    cSet(question, out);
+    res.status(200).json(out);
+
+  } catch (e) {
+    console.error('Genel hata:', e.message);
+    res.status(500).json({ error: 'Sunucu hatası', detail: DEBUG ? e.message : 'Geçici sorun' });
   }
 }
