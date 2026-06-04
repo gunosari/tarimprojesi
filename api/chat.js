@@ -93,6 +93,11 @@ const HARIC = new Set([
   'tatlı patates','kuşdili bitkisi biberiye'
 ].map(norm));
 
+// Grup terimleri: "sebze/meyve/tahıl/örtüaltı" ürün değil GRUP -> "Ürün Grubu" ile filtrelenir
+const GROUPS = { 'sebze':'Sebze','meyve':'Meyve','tahıl':'Tahıl','tahil':'Tahıl',
+  'örtüaltı':'Örtüaltı','ortualti':'Örtüaltı','sera':'Örtüaltı','tahıllar':'Tahıl' };
+function resolveGrup(term) { return term ? (GROUPS[norm(term)] || null) : null; }
+
 // Kullanıcı terimini -> kesin ürün adları listesi (o tabloda var olanlarla sınırlı)
 function resolveUrun(term, tabloSet) {
   if (!term) return [];
@@ -131,11 +136,13 @@ function resolveIlce(term) {
 function inList(arr) { return arr.map(u => `'${u.replace(/'/g, "''")}'`).join(','); }
 
 function buildSQL(p) {
-  const { il, ilce, urunler, yil, yilStart, yilEnd, intent } = p;
+  const { il, ilce, urunler, grup, yil, yilStart, yilEnd, intent } = p;
   const tablo = ilce ? T_ILCE : T_IL;
   const ilceFiltre = ilce ? ` AND "İlçe"='${ilce.replace(/'/g, "''")}'` : '';
   const ilFiltre = il ? ` AND "İl"='${il.replace(/'/g, "''")}'` : '';
-  const urunFiltre = urunler && urunler.length ? ` AND "Ürün" IN (${inList(urunler)})` : '';
+  // Grup sorgusu ("sebze","meyve","tahıl") -> "Ürün Grubu"; aksi halde ürün IN listesi
+  const urunFiltre = grup ? ` AND "Ürün Grubu"='${grup.replace(/'/g, "''")}'`
+    : (urunler && urunler.length ? ` AND "Ürün" IN (${inList(urunler)})` : '');
 
   // 1) SIRALAMA: "X ili Y üretiminde kaçıncı" / "en çok Y üreten il" -> CTE + ROW_NUMBER
   if (intent === 'siralama') {
@@ -174,12 +181,14 @@ async function extractFields(question, maxYil) {
   const sys = `Türkiye tarım sorgularını JSON alanlara ayır. SADECE JSON döndür, açıklama yok.
 Alanlar:
 - "il": Soruda geçen il adı (yoksa null). Geçerli iller: ${illerStr}
+- "il2": Karşılaştırma varsa İKİNCİ il (yoksa null).
 - "ilce": Soruda ilçe geçiyorsa adı (yoksa null). İlçe geçerse il düzeyi değil ilçe verisi kullanılır.
 - "urun": Ürün/ürün ailesi terimi, kullanıcının yazdığı sade haliyle (örn "elma","sofralık üzüm","durum buğdayı"). Yoksa null.
 - "ortualti": Soru sera/örtüaltı içeriyorsa true, değilse false.
 - "yil": Tek yıl geçiyorsa (örn 2023) o sayı; geçmiyorsa null.
 - "yilStart","yilEnd": Aralık/trend varsa (örn "son 5 yıl","2020-2024 arası") başlangıç ve bitiş; yoksa null.
-- "intent": "uretim" | "alan" | "siralama" | "trend".
+- "intent": "uretim" | "alan" | "siralama" | "trend" | "karsilastirma".
+   * "karşılaştır","kıyasla","hangisi daha çok","X mi Y mi" + iki il -> "karsilastirma"
    * "kaçıncı","sıralama","en çok","lider" -> "siralama"
    * "trend","yıllara göre","son N yıl","değişim","artış" -> "trend"
    * "alan","kaç dekar","ekili alan" -> "alan"
@@ -187,11 +196,14 @@ Alanlar:
 Kurallar: Yazım hatalarını düzelt (anakara->ankara, kaysı->kayısı). En güncel yıl ${maxYil}.
 Örnekler:
 Soru: "Mersin limon üretimi" -> {"il":"Mersin","ilce":null,"urun":"limon","ortualti":false,"yil":null,"yilStart":null,"yilEnd":null,"intent":"uretim"}
+Soru: "Mersin sebze üretimi" -> {"il":"Mersin","ilce":null,"urun":"sebze","ortualti":false,"yil":null,"yilStart":null,"yilEnd":null,"intent":"uretim"}
+Not: "sebze","meyve","tahıl" birer üründür değil GRUP'tur; yine de "urun" alanına o kelimeyi yaz.
 Soru: "Tarsus'ta domates" -> {"il":"Mersin","ilce":"Tarsus","urun":"domates","ortualti":false,"yil":null,"yilStart":null,"yilEnd":null,"intent":"uretim"}
 Soru: "Afyonkarahisar buğday üretiminde kaçıncı sırada" -> {"il":"Afyonkarahisar","ilce":null,"urun":"buğday","ortualti":false,"yil":null,"yilStart":null,"yilEnd":null,"intent":"siralama"}
 Soru: "En çok elma üreten il" -> {"il":null,"ilce":null,"urun":"elma","ortualti":false,"yil":null,"yilStart":null,"yilEnd":null,"intent":"siralama"}
 Soru: "Antalya domates son 5 yıl trend" -> {"il":"Antalya","ilce":null,"urun":"domates","ortualti":false,"yil":null,"yilStart":${maxYil - 4},"yilEnd":${maxYil},"intent":"trend"}
-Soru: "Antalya örtüaltı domates" -> {"il":"Antalya","ilce":null,"urun":"domates","ortualti":true,"yil":null,"yilStart":null,"yilEnd":null,"intent":"uretim"}`;
+Soru: "Antalya örtüaltı domates" -> {"il":"Antalya","ilce":null,"urun":"domates","ortualti":true,"yil":null,"yilStart":null,"yilEnd":null,"intent":"uretim"}
+Soru: "Adana Antalya domates karşılaştır" -> {"il":"Adana","il2":"Antalya","ilce":null,"urun":"domates","ortualti":false,"yil":null,"yilStart":null,"yilEnd":null,"intent":"karsilastirma"}`;
 
   const resp = await openai.chat.completions.create({
     model: MODEL,
@@ -209,6 +221,15 @@ function buildAnswer(p, rows) {
   const yer = p.ilce ? `${p.ilce} (${p.il})` : (p.il || 'Türkiye');
   const urunAd = p.urunEtiket || 'ürün';
 
+  if (p.intent === 'karsilastirma') {
+    if (rows.length < 2) return `Karşılaştırma için iki ilin de ${urunAd} verisi gerekli; biri bulunamadı.`;
+    const [a, b] = rows;   // üretime göre azalan sıralı
+    const fark = b.tpl > 0 ? Math.round((a.tpl - b.tpl) / b.tpl * 100) : 0;
+    return `${p.yil} yılı ${urunAd} üretimi karşılaştırması:\n` +
+      `• ${a.il}: ${fmt(a.tpl)} ton (${fmt(a.alan)} dekar)\n` +
+      `• ${b.il}: ${fmt(b.tpl)} ton (${fmt(b.alan)} dekar)\n` +
+      `${a.il}, ${b.il}'den %${fark} daha fazla üretiyor.`;
+  }
   if (p.intent === 'siralama') {
     if (p.il && rows[0].sira) return `${rows[0].il}, ${p.yil} yılı ${urunAd} üretiminde ${rows[0].sira}. sırada (${fmt(rows[0].tpl)} ton).`;
     const lst = rows.map((r, i) => `${i + 1}. ${r.il} (${fmt(r.tpl)} ton)`).join('\n');
@@ -268,40 +289,49 @@ export default async function handler(req, res) {
 
     // 2) Deterministik çözümleme
     const il = resolveIl(f.il);
+    const il2 = resolveIl(f.il2);                        // karşılaştırma için ikinci il
     const ilce = f.ilce ? f.ilce : null;                 // ilçe adı varsa kds_ilce'ye gideriz
     const yil = f.yil || (f.intent === 'trend' ? null : maxYil);
     const yilStart = f.yilStart || (maxYil - 4);
     const yilEnd = f.yilEnd || maxYil;
 
-    // Ürün çözümle — hedef tabloya göre (ilçe varsa kds_ilce ürün seti)
-    const hedefSet = ilce ? WL.urunIlceSet : WL.urunIlSet;
-    let urunler = resolveUrun(f.urun, hedefSet);
-    // Örtüaltı: ürün adlarını "Örtüaltı " önekine çevir, ilçe tablosuna yönlen
-    let useIlce = !!ilce;
-    if (f.ortualti) {
-      useIlce = true;
+    // Grup mu, ürün mü? ("sebze/meyve/tahıl/örtüaltı" -> grup)
+    const grup = resolveGrup(f.urun);
+
+    // Ürün çözümle — grup değilse; örtüaltı/ilçe varsa kds_ilce ürün seti
+    const ilceSet = (ilce || f.ortualti || grup === 'Örtüaltı');
+    let urunler = grup ? [] : resolveUrun(f.urun, ilceSet ? WL.urunIlceSet : WL.urunIlSet);
+    // Örtüaltı ürün: adları "Örtüaltı " önekine çevir
+    if (f.ortualti && !grup) {
       urunler = resolveUrun(f.urun, WL.urunIlceSet).map(u => 'Örtüaltı ' + u).filter(u => WL.urunIlceSet.has(u));
     }
 
     const p = {
-      il, ilce: useIlce ? (ilce || null) : null,
-      urunler, urunEtiket: f.urun || 'ürün',
+      il, il2, ilce: ilce || null, urunler, grup,
+      urunEtiket: grup ? norm(f.urun) : (f.urun || 'ürün'),
       yil, yilStart, yilEnd, intent: f.intent || 'uretim'
     };
-    // örtüaltı ilçe filtresiz, sadece il+örtüaltı ürün: ilce null ama tablo kds_ilce olmalı
-    if (f.ortualti && !ilce) { p._ortualtiIl = true; }
 
-    if (!urunler.length && f.urun)
-      return res.status(200).json({ success: true, answer: `"${f.urun}" için eşleşen ürün bulunamadı. Daha genel bir ad deneyin (örn "elma","domates").`, processingTime: Date.now() - t0 });
+    // "Bulunamadı" sadece: grup değil, örtüaltı değil, ürün verilmiş ama eşleşme yok
+    if (!grup && !f.ortualti && !urunler.length && f.urun)
+      return res.status(200).json({ success: true, answer: `"${f.urun}" için eşleşen ürün bulunamadı. Daha genel bir ad deneyin (örn "elma","domates","sebze").`, processingTime: Date.now() - t0 });
 
-    // 3) SQL kur — örtüaltı il-geneli özel durumu (ilçe tablosu ama ilçe filtresi yok)
+    // 3) SQL kur
     let sql;
-    if (f.ortualti && !ilce) {
-      const urunFiltre = urunler.length ? ` AND "Ürün" IN (${inList(urunler)})` : '';
+    const ilGeneliOrtu = (f.ortualti || grup === 'Örtüaltı') && !ilce;
+    const prodFiltre = grup ? ` AND "Ürün Grubu"='${grup.replace(/'/g, "''")}'`
+      : (urunler.length ? ` AND "Ürün" IN (${inList(urunler)})` : '');
+
+    if (p.intent === 'karsilastirma' && il && il2) {
+      // İki ili yan yana: kds (il düzeyi), tek sorgu
+      sql = `SELECT "İl" il, SUM("Üretim") tpl, SUM("Alan") alan
+        FROM ${T_IL} WHERE "Yıl"=${yil} AND "İl" IN ('${il.replace(/'/g, "''")}','${il2.replace(/'/g, "''")}')${prodFiltre}
+        GROUP BY "İl" ORDER BY tpl DESC`;
+    } else if (ilGeneliOrtu) {
       const ilFiltre = il ? ` AND "İl"='${il.replace(/'/g, "''")}'` : '';
       sql = `SELECT SUM("Üretim") uretim, SUM("Alan") alan,
         CASE WHEN SUM("Alan")>0 THEN ROUND(CAST(SUM("Üretim") AS FLOAT)/SUM("Alan")*1000) ELSE 0 END verim
-        FROM ${T_ILCE} WHERE "Yıl"=${yil}${ilFiltre}${urunFiltre}`;
+        FROM ${T_ILCE} WHERE "Yıl"=${yil}${ilFiltre}${prodFiltre}`;
     } else {
       sql = buildSQL(p);
     }
