@@ -111,12 +111,22 @@ KURALLAR:
 - Hastalık/zararlı/ilaç konularında ASLA somut ilaç adı, etken madde veya doz verme.
   Bunun yerine kültürel/önleyici (IPM) tedbirleri yaz ve "ruhsatlı ilaç ve doz için il/ilçe tarım müdürlüğü ziraat mühendisi ve reçete sistemi" diye yönlendir.
 - Bölgesel/güncel istatistik UYDURMA; istatistik gerekiyorsa "TÜİK verisine NeoBi panelinden bakılabilir" de.
-- Abartılı vaat yok, mütevazı ve doğru ol.`;
+- Abartılı vaat yok, mütevazı ve doğru ol.
+- Markdown KULLANMA (** , ## gibi işaretler yok). Düz metin yaz; gerekirse satır başında "-" ile maddele.`;
+
+// Markdown artığı temizle — baloncuk düz metin gösteriyor (** ## kalmasın).
+function plain(s) {
+  return String(s)
+    .replace(/\*\*(.*?)\*\*/g, '$1')   // **kalın** -> kalın
+    .replace(/\*\*/g, '')               // tek kalan **
+    .replace(/^#{1,6}\s*/gm, '')        // başlık #
+    .trim();
+}
 
 async function answerAdvisory(question) {
   const hit = bestBilgi(question);
   if (hit) {   // hazır cevap — LLM maliyeti yok
-    let a = hit.cevap;
+    let a = plain(hit.cevap);
     if (hit.guvenlik) a += RECETE_UYARI;
     return { answer: a, source: 'bilgi', konu: hit.konu };
   }
@@ -126,7 +136,7 @@ async function answerAdvisory(question) {
     messages: [{ role: 'system', content: ADVISORY_SYS }, { role: 'user', content: question }],
     temperature: 0.3, max_tokens: 500
   });
-  return { answer: (resp.choices[0].message.content || '').trim(), source: 'llm' };
+  return { answer: plain(resp.choices[0].message.content || ''), source: 'llm' };
 }
 
 /** ===================== ÜRÜN ALIAS TABLOSU (küratörlü) ===================== **/
