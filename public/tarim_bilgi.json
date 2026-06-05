@@ -1,0 +1,149 @@
+{
+  "domates_yetistiricilik": {
+    "konu": "Domates yetiştiriciliği",
+    "grup": "sebze",
+    "anahtar_kelimeler": [
+      "domates",
+      "yetiştir",
+      "ekim",
+      "verim",
+      "sera"
+    ],
+    "cevap": "Domates yetiştiriciliğinde başarılı olmak için dikkat etmeniz gereken bazı temel noktalar var:\n\n1. **Toprak Hazırlığı**: Domates, iyi drene olmuş, organik maddece zengin toprakları sever. Toprağı derinlemesine işleyin ve gerekli gübrelemeyi yapın.\n\n2. **Fide Seçimi**: Sağlıklı ve hastalıklardan arındırılmış fideler seçin. Yerel tarım müdürlüğünden uygun çeşitler hakkında bilgi alın.\n\n3. **Sulama**: Domates bitkileri düzenli sulama ister. Toprağın nemini kontrol edin; aşırı sulamadan kaçının. Damla sulama sistemi tercih edilebilir.\n\n4. **Hastalık ve Zararlılarla Mücadele**: Önleyici tedbirler alın. Bitkileri düzenli olarak kontrol edin, hastalıklı veya zararlı bitkileri hemen ayırın. Ayrıca, iyi bir rotasyon uygulayın. \n\n5. **Gübreleme**: Bitkilerin büyüme dönemine göre dengeli gübreleme yapın. Organik gübre kullanımı faydalıdır.\n\n6. **Hasat Zamanı**: Domatesler olgunlaştığında, hafifçe sıkıldığında yumuşak olmalı. Hasatınızı zamanında yaparak kaliteyi artırın.\n\nRuhsatlı ilaç ve doz için il/ilçe tarım müdürlüğü ziraat mühendisi ve reçete sistemi ile iletişime geçin. Başarılar dilerim!",
+    "kaynak": "NeoBi danışmanlık (gpt-4o-mini üretim)",
+    "guvenlik": false,
+    "guncelleme": "2026-06-05"
+  },
+  "biber_yetistiricilik": {
+    "konu": "Biber yetiştiriciliği",
+    "grup": "sebze",
+    "anahtar_kelimeler": [
+      "biber",
+      "yetiştir",
+      "kapya",
+      "sivri"
+    ],
+    "cevap": "Biber yetiştiriciliği, doğru yöntemlerle yapıldığında karlı bir tarım faaliyeti olabilir. İşte dikkat etmeniz gereken bazı pratik noktalar:\n\n1. **Toprak Hazırlığı**: Biber, iyi drene olan, organik maddece zengin toprakları sever. Toprağınızı iyi bir şekilde işleyin ve organik gübre ekleyin.\n\n2. **Fide Seçimi**: Sağlıklı ve sertifikalı fideler kullanın. Fide alırken hastalıklara karşı dayanıklı çeşitleri tercih edin.\n\n3. **Sulama**: Biber bitkisi suyu sever, ancak aşırı sulamadan kaçının. Toprağın üst kısmı kuruduğunda sulama yapın.\n\n4. **Düzenli Kontrol**: Bitkilerinizi düzenli olarak kontrol edin. Hastalık ve zararlılara karşı erken müdahale önemlidir. \n\n5. **Kültürel Önlemler**: Crop rotation (ürün rotasyonu) yaparak toprak sağlığını koruyun. Ayrıca, bitki aralıklarını iyi ayarlayarak hava sirkülasyonunu artırın.\n\n6. **Gübreleme**: İhtiyaç duyduğunuzda dengeli bir gübreleme yapın. Toprak analizi ile bitkinizin ihtiyaçlarını belirleyin.\n\nHastalık ve zararlılar için ruhsatlı ilaç ve doz bilgisi için il/ilçe tarım müdürlüğü ziraat mühendisi ile iletişime geçin. Başarılar dilerim!",
+    "kaynak": "NeoBi danışmanlık (gpt-4o-mini üretim)",
+    "guvenlik": false,
+    "guncelleme": "2026-06-05"
+  },
+  "elma_yetistiricilik": {
+    "konu": "Elma yetiştiriciliği",
+    "grup": "meyve",
+    "anahtar_kelimeler": [
+      "elma",
+      "bahçe",
+      "anaç",
+      "budama"
+    ],
+    "cevap": "Elma yetiştiriciliği, doğru uygulamalarla verimli ve kaliteli bir ürün elde etmenizi sağlar. İşte dikkate almanız gereken bazı temel noktalar:\n\n- **Doğru çeşit seçimi:** Bölgenizin iklimine uygun elma çeşitlerini tercih edin. Yerel tarım müdürlüğünden destek alarak en uygun çeşitleri belirleyin.\n\n- **Toprak analizi:** Ağaç dikiminden önce toprağınızı analiz ettirin. pH, besin maddeleri ve drenaj durumu gibi faktörleri göz önünde bulundurun.\n\n- **Dikim mesafesi:** Ağaçlar arasında yeterli mesafe bırakın. Bu, hava sirkülasyonunu artırır ve hastalık riskini azaltır.\n\n- **Sulama:** Elmaların su ihtiyacını düzenli olarak karşılayın. Özellikle çiçeklenme ve meyve gelişimi döneminde sulama önemlidir.\n\n- **Hastalık ve zararlılarla mücadele:** Enfeksiyonları önlemek için düzenli gözlem yapın. Temiz ve düzenli bir bahçe, hastalık riskini azaltır. Ruhsatlı ilaç ve doz için il/ilçe tarım müdürlüğü ziraat mühendisi ve reçete sistemine başvurun.\n\n- **Budama:** Ağaçlarınızı düzenli olarak budayarak sağlıklı bir gelişim sağlayın. Bu, meyve kalitesini artırır.\n\nBu basit adımları takip ederek elma yetiştiriciliğinde başarılı olabilirsiniz.",
+    "kaynak": "NeoBi danışmanlık (gpt-4o-mini üretim)",
+    "guvenlik": false,
+    "guncelleme": "2026-06-05"
+  },
+  "incir_yetistiricilik": {
+    "konu": "İncir yetiştiriciliği",
+    "grup": "meyve",
+    "anahtar_kelimeler": [
+      "incir",
+      "kurutmalık",
+      "döllenme",
+      "ilek"
+    ],
+    "cevap": "İncir yetiştiriciliği, doğru uygulamalarla verimli bir şekilde yapılabilir. İşte dikkate almanız gereken bazı pratik öneriler:\n\n- **Toprak Hazırlığı**: İncir, iyi drene olan, organik maddece zengin toprakları sever. Toprağınızı analiz ettirin ve gerekli iyileştirmeleri yapın.\n\n- **Sulama**: İncir ağaçları, kuraklığa dayanıklıdır ancak düzenli sulama verimi artırır. Damla sulama sistemi tercih edin.\n\n- **Gübreleme**: Organik gübre kullanarak toprağınızın verimliliğini artırabilirsiniz. Analiz sonuçlarına göre dengeli bir gübreleme programı oluşturun.\n\n- **Hastalık ve Zararlılar**: İncir ağaçlarında sık görülen hastalık ve zararlılara karşı kültürel önlemler alın. Temizlik, iyi havalandırma ve doğru sulama gibi yöntemler önemlidir. Ruhsatlı ilaç ve doz için il/ilçe tarım müdürlüğü ziraat mühendisi ve reçete sistemine danışın.\n\n- **Budama**: Ağaçlarınızı düzenli olarak budayarak hava sirkülasyonunu artırın ve meyve kalitesini yükseltin.\n\nBu önerilere dikkat ederek, sağlıklı ve verimli bir incir bahçesi oluşturabilirsiniz.",
+    "kaynak": "NeoBi danışmanlık (gpt-4o-mini üretim)",
+    "guvenlik": false,
+    "guncelleme": "2026-06-05"
+  },
+  "bugday_ekimi": {
+    "konu": "Buğday ekimi ve yetiştiriciliği",
+    "grup": "tahıl",
+    "anahtar_kelimeler": [
+      "buğday",
+      "ekim",
+      "tohum",
+      "gübre",
+      "hasat"
+    ],
+    "cevap": "Buğday ekimi ve yetiştiriciliği, verimli bir hasat için dikkat edilmesi gereken önemli adımları içerir. İşte uygulayabileceğiniz pratik öneriler:\n\n1. **Toprak Hazırlığı**: Toprağınızı iyi bir şekilde işleyin. Ekim öncesi toprak analizi yaptırarak pH ve besin maddelerini kontrol edin.\n\n2. **Ekim Zamanı**: Bölgenizin iklim koşullarına göre ekim zamanını belirleyin. Genellikle sonbahar veya erken ilkbahar en uygun dönemdir.\n\n3. **Tohum Seçimi**: Yerel iklim ve toprak koşullarına uygun, yüksek verimli ve hastalıklara dayanıklı tohumları tercih edin.\n\n4. **Ekim Derinliği**: Tohumları 3-5 cm derinliğe ekin. Bu, tohumların çimlenmesi için idealdir.\n\n5. **Sulama**: Özellikle çimlenme döneminde toprak nemini koruyun. Aşırı sulamadan kaçının.\n\n6. **Hastalık ve Zararlılarla Mücadele**: Tohumları ekmeden önce ve bitki gelişimi sırasında düzenli olarak kontrol edin. Enfeksiyon ve zararlılara karşı kültürel önlemler alın. Gerekirse ruhsatlı ilaç ve doz için il/ilçe tarım müdürlüğü ziraat mühendisi ve reçete sistemine başvurun.\n\n7. **Gübreleme**: Toprak analizi sonuçlarına göre dengeli bir gübreleme yapın. Azot, fosfor ve potasyum oranlarını göz önünde bulundurun.\n\nBu adımları takip ederek buğday yetiştiriciliğinizde başarılı olabilirsiniz. Unutmayın, yerel koşullara göre uygulamalarınızı uyarlamak önemlidir.",
+    "kaynak": "NeoBi danışmanlık (gpt-4o-mini üretim)",
+    "guvenlik": false,
+    "guncelleme": "2026-06-05"
+  },
+  "misir_yetistiricilik": {
+    "konu": "Mısır yetiştiriciliği",
+    "grup": "tahıl",
+    "anahtar_kelimeler": [
+      "mısır",
+      "silajlık",
+      "danelik",
+      "sulama"
+    ],
+    "cevap": "Mısır yetiştiriciliği, doğru uygulamalarla verimli bir şekilde yapılabilir. İşte dikkat etmeniz gereken bazı pratik noktalar:\n\n1. **Toprak Hazırlığı**: Mısır, iyi drene edilmiş, besin açısından zengin toprakları sever. Toprağınızı derinlemesine işleyin ve organik madde ekleyin.\n\n2. **Ekim Zamanı**: Mısır için en uygun ekim zamanı, toprak sıcaklığının 10-12°C’ye ulaştığı dönemdir. Genellikle Nisan sonu - Mayıs başı idealdir.\n\n3. **Sulama**: Mısır, suya ihtiyaç duyan bir bitkidir. Özellikle çiçeklenme döneminde düzenli sulama yapın. Toprağın nemini kontrol edin.\n\n4. **Gübreleme**: Toprağınızın analizini yaptırarak, ihtiyaç duyulan besin maddelerini belirleyin. Azot, fosfor ve potasyum dengesi önemlidir.\n\n5. **Hastalık ve Zararlılarla Mücadele**: Mısırda hastalık ve zararlılarla mücadelede, öncelikle kültürel önlemler alın. Rotasyon, temiz tarım uygulamaları ve dirençli çeşitler seçin. Sorun yaşarsanız, ruhsatlı ilaç ve doz için il/ilçe tarım müdürlüğü ziraat mühendisi ve reçete sistemine danışın.\n\nBu basit önlemlerle mısır veriminizi artırabilirsiniz. Başarılar dilerim!",
+    "kaynak": "NeoBi danışmanlık (gpt-4o-mini üretim)",
+    "guvenlik": false,
+    "guncelleme": "2026-06-05"
+  },
+  "domates_hastalik_zararli": {
+    "konu": "Domateste yaygın hastalık ve zararlılar",
+    "grup": "zararli",
+    "anahtar_kelimeler": [
+      "mildiyö",
+      "leke",
+      "küf",
+      "hastalık",
+      "zararlı",
+      "böcek"
+    ],
+    "cevap": "Domateste yaygın hastalık ve zararlılarla mücadelede öncelikle kültürel önlemler almak önemlidir. İşte uygulayabileceğiniz bazı pratik öneriler:\n\n1. **Dönüşümlü Ekimi Uygulayın**: Domatesi her yıl aynı alanda yetiştirmek, hastalık ve zararlıları artırır. Farklı bitkilerle dönüşümlü ekim yaparak toprak sağlığını koruyun.\n\n2. **Temiz ve Sağlıklı Fidan Kullanın**: Fidanlarınızı güvenilir kaynaklardan temin edin. Hastalıklı fidan kullanımı, zararlıların yayılmasına neden olabilir.\n\n3. **Sulama Yönetimi**: Aşırı sulama, kök çürüklüğü gibi hastalıklara yol açabilir. Toprağın nem durumunu kontrol edin ve gerektiğinde sulama yapın.\n\n4. **Bitki Aralıklarını İyi Ayarlayın**: Bitkiler arasında yeterli mesafe bırakmak, hava sirkülasyonunu artırır ve hastalık riskini azaltır.\n\n5. **Düzenli Kontrol Yapın**: Tarlalarınızı düzenli olarak kontrol edin. Erken teşhis, zararlılarla mücadelede önemli bir adımdır.\n\n6. **Hijyen Kurallarına Uyun**: Tarla ekipmanlarınızı temiz tutun ve hastalıklı bitki artıklarıyla teması önleyin.\n\nHastalık ve zararlılarla ilgili ruhsatlı ilaç ve doz bilgisi için il/ilçe tarım müdürlüğü ziraat mühendisine başvurun. Unutmayın, önlem almak her zaman tedavi etmekten daha etkilidir.",
+    "kaynak": "NeoBi danışmanlık (gpt-4o-mini üretim)",
+    "guvenlik": true,
+    "guncelleme": "2026-06-05"
+  },
+  "beyaz_sinek": {
+    "konu": "Beyaz sinek (Bemisia) mücadelesi",
+    "grup": "zararli",
+    "anahtar_kelimeler": [
+      "beyaz sinek",
+      "bemisia",
+      "sera zararlı",
+      "yapışkan tuzak"
+    ],
+    "cevap": "Beyaz sinek (Bemisia) mücadelesinde etkili ve sürdürülebilir yöntemler uygulamak önemlidir. İşte bu zararlıyla başa çıkmak için alabileceğiniz bazı önleyici tedbirler:\n\n1. **Bitki Seçimi**: Beyaz sineğe dayanıklı bitki çeşitlerini tercih edin. Bu, zararın etkisini azaltabilir.\n\n2. **Düzenli Gözlem**: Tarlalarınızı düzenli olarak kontrol edin. Beyaz sineklerin varlığını erken tespit etmek, mücadelenizi kolaylaştırır.\n\n3. **Temizlik**: Tarla ve çevresindeki yabancı otları temizleyin. Bu otlar, beyaz sineklerin barınmasına ve üremesine zemin hazırlar.\n\n4. **Doğal Düşmanlar**: Beyaz sineklerin doğal düşmanlarını (örneğin, parazitoid böcekler) teşvik edin. Bu, zararlıların popülasyonunu kontrol altına alabilir.\n\n5. **Sıralı Ekim**: Bitkilerinizi sıralı ekim yaparak yerleştirin. Bu, zararlının yayılmasını zorlaştırır.\n\n6. **İyi Tarım Uygulamaları**: Sulama ve gübreleme gibi uygulamalarda dikkatli olun. Aşırı sulama veya gübreleme, beyaz sineklerin çoğalmasını teşvik edebilir.\n\nUnutmayın, ruhsatlı ilaç ve doz bilgisi için il/ilçe tarım müdürlüğü ziraat mühendisi ve reçete sistemine başvurun. Mücadelede başarılar dilerim!",
+    "kaynak": "NeoBi danışmanlık (gpt-4o-mini üretim)",
+    "guvenlik": true,
+    "guncelleme": "2026-06-05"
+  },
+  "urun_secimi": {
+    "konu": "Bu sezon ne ekmeli — ürün seçimi mantığı",
+    "grup": "pazar",
+    "anahtar_kelimeler": [
+      "ne ekmeli",
+      "kârlı",
+      "ürün seç",
+      "hangi ürün",
+      "pazar"
+    ],
+    "cevap": "Bu sezon ne ekmeli sorusu, birçok faktöre bağlıdır. İşte ürün seçimi yaparken dikkate almanız gereken bazı noktalar:\n\n1. **Toprak Analizi**: Toprağınızın pH, besin maddeleri ve organik madde durumunu kontrol edin. Bu, hangi ürünlerin en iyi verimi vereceğini belirlemenize yardımcı olur.\n\n2. **İklim Koşulları**: Bölgenizin iklimini göz önünde bulundurun. Sıcaklık, yağış miktarı ve don olayları, hangi ürünlerin yetişebileceğini etkiler.\n\n3. **Pazar Talebi**: Yerel pazarın ihtiyaçlarını araştırın. Hangi ürünlere talep var? Bu, ekonomik açıdan kazanç sağlamanıza yardımcı olur.\n\n4. **Rotasyon Uygulamaları**: Monokültürden kaçının. Farklı ürünler ekerek toprak sağlığını koruyun ve hastalık riskini azaltın.\n\n5. **Su Kaynakları**: Sulama imkanlarınızı değerlendirin. Suya ihtiyaç duyan ürünler seçerken bu durumu göz önünde bulundurun.\n\nSon olarak, ruhsatlı ilaç ve doz bilgileri için il/ilçe tarım müdürlüğü ziraat mühendisi ile iletişime geçin. Bu şekilde, sağlıklı ve verimli bir tarım sezonu geçirebilirsiniz.",
+    "kaynak": "NeoBi danışmanlık (gpt-4o-mini üretim)",
+    "guvenlik": false,
+    "guncelleme": "2026-06-05"
+  },
+  "tarsim_sigorta": {
+    "konu": "TARSİM tarım sigortası",
+    "grup": "mevzuat",
+    "anahtar_kelimeler": [
+      "tarsim",
+      "sigorta",
+      "don",
+      "dolu",
+      "hasar",
+      "prim"
+    ],
+    "cevap": "TARSİM tarım sigortası, tarımsal üretiminizi çeşitli risklere karşı korumanın önemli bir yoludur. İşte TARSİM sigortasından faydalanmak için dikkate almanız gereken bazı noktalar:\n\n- **Riskleri Belirleyin:** Hangi risklerle karşılaşabileceğinizi (doğal afetler, hastalıklar, zararlılar) değerlendirin. Bu, hangi sigorta türüne başvurmanız gerektiğini belirleyecektir.\n\n- **Sigorta Türlerini Araştırın:** TARSİM, bitkisel ürünler, hayvancılık ve sera gibi çeşitli alanlarda sigorta seçenekleri sunar. İhtiyacınıza uygun olanı seçin.\n\n- **Başvuru Sürecini Takip Edin:** Sigorta başvurularınızı zamanında yapın. Başvuru tarihlerini ve gerekli belgeleri kontrol edin.\n\n- **Destek ve Bilgi Alın:** İl/ilçe tarım müdürlüğüne başvurarak, sigorta ile ilgili detaylı bilgi ve destek alın. Uzmanlardan yardım almak, doğru karar vermenize yardımcı olacaktır.\n\n- **Düzenli Kontroller Yapın:** Tarım alanlarınızı düzenli olarak kontrol edin. Hasar durumunda sigorta sürecini başlatmak için gerekli belgeleri hazırlayın.\n\nTARSİM sigortası, tarımsal sürdürülebilirliğinizi artırır ve olası kayıplara karşı sizi korur. Unutmayın, tarımsal üretimde riskleri azaltmanın en etkili yolu, doğru sigorta ile başlamaktır.",
+    "kaynak": "NeoBi danışmanlık (gpt-4o-mini üretim)",
+    "guvenlik": false,
+    "guncelleme": "2026-06-05"
+  }
+}
