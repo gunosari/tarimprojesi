@@ -1,5 +1,5 @@
-// api/chat.js — Türkiye Tarım Veritabanı Chatbot v2 (Production Ready)
-// Mimari: Soru -> LLM (alan çıkarımı: JSON) -> JS deterministik çözümleme -> şablon SQL -> SQLite
+// api/chat.js — Türkiye Tarım Veritabanı Chatbot v3 (Veri + Danışmanlık Router)
+// Mimari: Soru -> LLM (tip + alan çıkarımı: JSON) -> [veri] JS+SQL  |  [danismanlik] bilgi JSON / grounded LLM
 // İki tablo: kds (il, 2014-2025)  |  kds_ilce (ilçe + örtüaltı, 2024-2025)
 export const config = { runtime: 'nodejs', maxDuration: 30 };
 import fs from 'fs';
@@ -8,7 +8,8 @@ import initSqlJs from 'sql.js';
 import OpenAI from 'openai';
 
 /** ===================== CONFIG ===================== **/
-const DB_FILE = 'tarimdb.sqlite';          // public/ içinde
+const DB_FILE    = 'tarimdb.sqlite';         // public/ içinde
+const BILGI_FILE = 'tarim_bilgi.json';       // [YENİ] public/ içinde — danışmanlık bilgi tabanı
 const T_IL    = 'kds';                       // il düzeyi, 2014-2025
 const T_ILCE  = 'kds_ilce';                  // ilçe düzeyi, 2024-2025 (örtüaltı dahil)
 const MODEL   = process.env.OPENAI_MODEL || 'gpt-4o-mini';
@@ -69,6 +70,63 @@ function buildWhitelist(db) {
   WL = { iller, ilByNorm, ilceByNorm, urunByNorm,
          urunIlSet: new Set(urunIl), urunIlceSet: new Set(urunIlce) };
   return WL;
+}
+
+/** ===================== [YENİ] DANIŞMANLIK BİLGİ TABANI ===================== **/
+// public/tarim_bilgi.json'u cold start'ta bir kez yükle, bellekte tut. Dosya yoksa -> hep LLM fallback.
+let BILGI = null;
+function loadBilgi() {
+  if (BILGI) return BILGI;
+  try {
+    const p = path.join(process.cwd(), 'public', BILGI_FILE);
+    BILGI = JSON.parse(fs.readFileSync(p, 'utf8'));
+  } catch (e) {
+    if (DEBUG) console.warn('tarim_bilgi.json yüklenemedi, LLM fallback kullanılacak:', e.message);
+    BILGI = {};
+  }
+  return BILGI;
+}
+
+// Soruyu bilgi tabanındaki konularla eşleştir: en çok anahtar kelime tutan konu kazanır.
+function bestBilgi(question) {
+  const b = loadBilgi();
+  const nq = norm(question);
+  let best = null, bestScore = 0;
+  for (const key in b) {
+    const t = b[key];
+    let score = 0;
+    for (const kw of (t.anahtar_kelimeler || [])) if (nq.includes(norm(kw))) score++;
+    if (score > bestScore) { bestScore = score; best = t; }
+  }
+  return bestScore >= 1 ? best : null;   // en az 1 anahtar kelime tutmalı
+}
+
+// Güvenlik-kritik konularda (hastalık/zararlı) UI'ya standart reçete uyarısı ekle.
+const RECETE_UYARI = '\n\n⚠️ İlaç adı ve doz için ruhsatlı ürünler ve reçete sistemi gerekir; il/ilçe tarım müdürlüğü ziraat mühendisinize danışın.';
+
+// Danışmanlık LLM fallback'i — somut ilaç/doz vermez, veri için NeoBi panele yönlendirir.
+const ADVISORY_SYS = `Sen Türkiye tarımına hâkim bir ziraat danışmanısın. Türkçe yaz, sade ve uygulanabilir ol.
+KURALLAR:
+- Cevap kısa ve pratik olsun (en fazla ~200 kelime), çiftçinin doğrudan uygulayabileceği netlikte.
+- Hastalık/zararlı/ilaç konularında ASLA somut ilaç adı, etken madde veya doz verme.
+  Bunun yerine kültürel/önleyici (IPM) tedbirleri yaz ve "ruhsatlı ilaç ve doz için il/ilçe tarım müdürlüğü ziraat mühendisi ve reçete sistemi" diye yönlendir.
+- Bölgesel/güncel istatistik UYDURMA; istatistik gerekiyorsa "TÜİK verisine NeoBi panelinden bakılabilir" de.
+- Abartılı vaat yok, mütevazı ve doğru ol.`;
+
+async function answerAdvisory(question) {
+  const hit = bestBilgi(question);
+  if (hit) {   // hazır cevap — LLM maliyeti yok
+    let a = hit.cevap;
+    if (hit.guvenlik) a += RECETE_UYARI;
+    return { answer: a, source: 'bilgi', konu: hit.konu };
+  }
+  // uzun kuyruk -> grounded LLM
+  const resp = await openai.chat.completions.create({
+    model: MODEL,
+    messages: [{ role: 'system', content: ADVISORY_SYS }, { role: 'user', content: question }],
+    temperature: 0.3, max_tokens: 500
+  });
+  return { answer: (resp.choices[0].message.content || '').trim(), source: 'llm' };
 }
 
 /** ===================== ÜRÜN ALIAS TABLOSU (küratörlü) ===================== **/
@@ -173,13 +231,14 @@ function buildSQL(p) {
       FROM ${tablo} WHERE "Yıl"=${yil}${ilFiltre}${ilceFiltre}${urunFiltre}`;
 }
 
-/** ===================== LLM: SORU -> ALAN ÇIKARIMI (JSON) ===================== **/
+/** ===================== LLM: SORU -> TİP + ALAN ÇIKARIMI (JSON) ===================== **/
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 async function extractFields(question, maxYil) {
   const illerStr = WL.iller.join(', ');
   const sys = `Türkiye tarım sorgularını JSON alanlara ayır. SADECE JSON döndür, açıklama yok.
 Alanlar:
+- "tip": Sorunun türü. "veri" = istatistik/üretim/alan/sıralama/trend/karşılaştırma (sayısal TÜİK verisi istenen sorular). "danismanlik" = nasıl yetiştirilir, hastalık/zararlı mücadelesi, gübreleme, sulama, ne ekmeli tavsiyesi, destek/mevzuat gibi BİLGİ soruları. Emin değilsen "veri" yaz.
 - "il": Soruda geçen il adı (yoksa null). Geçerli iller: ${illerStr}
 - "il2": Karşılaştırma varsa İKİNCİ il (yoksa null).
 - "ilce": Soruda ilçe geçiyorsa adı (yoksa null). İlçe geçerse il düzeyi değil ilçe verisi kullanılır.
@@ -187,7 +246,7 @@ Alanlar:
 - "ortualti": Soru sera/örtüaltı içeriyorsa true, değilse false.
 - "yil": Tek yıl geçiyorsa (örn 2023) o sayı; geçmiyorsa null.
 - "yilStart","yilEnd": Aralık/trend varsa (örn "son 5 yıl","2020-2024 arası") başlangıç ve bitiş; yoksa null.
-- "intent": "uretim" | "alan" | "siralama" | "trend" | "karsilastirma".
+- "intent": "uretim" | "alan" | "siralama" | "trend" | "karsilastirma". (tip="danismanlik" ise önemsiz, "uretim" yazabilirsin.)
    * "karşılaştır","kıyasla","hangisi daha çok","X mi Y mi" + iki il -> "karsilastirma"
    * "kaçıncı","sıralama","en çok","lider" -> "siralama"
    * "trend","yıllara göre","son N yıl","değişim","artış" -> "trend"
@@ -195,15 +254,18 @@ Alanlar:
    * diğer hepsi -> "uretim"
 Kurallar: Yazım hatalarını düzelt (anakara->ankara, kaysı->kayısı). En güncel yıl ${maxYil}.
 Örnekler:
-Soru: "Mersin limon üretimi" -> {"il":"Mersin","ilce":null,"urun":"limon","ortualti":false,"yil":null,"yilStart":null,"yilEnd":null,"intent":"uretim"}
-Soru: "Mersin sebze üretimi" -> {"il":"Mersin","ilce":null,"urun":"sebze","ortualti":false,"yil":null,"yilStart":null,"yilEnd":null,"intent":"uretim"}
+Soru: "Mersin limon üretimi" -> {"tip":"veri","il":"Mersin","ilce":null,"urun":"limon","ortualti":false,"yil":null,"yilStart":null,"yilEnd":null,"intent":"uretim"}
+Soru: "Mersin sebze üretimi" -> {"tip":"veri","il":"Mersin","ilce":null,"urun":"sebze","ortualti":false,"yil":null,"yilStart":null,"yilEnd":null,"intent":"uretim"}
 Not: "sebze","meyve","tahıl" birer üründür değil GRUP'tur; yine de "urun" alanına o kelimeyi yaz.
-Soru: "Tarsus'ta domates" -> {"il":"Mersin","ilce":"Tarsus","urun":"domates","ortualti":false,"yil":null,"yilStart":null,"yilEnd":null,"intent":"uretim"}
-Soru: "Afyonkarahisar buğday üretiminde kaçıncı sırada" -> {"il":"Afyonkarahisar","ilce":null,"urun":"buğday","ortualti":false,"yil":null,"yilStart":null,"yilEnd":null,"intent":"siralama"}
-Soru: "En çok elma üreten il" -> {"il":null,"ilce":null,"urun":"elma","ortualti":false,"yil":null,"yilStart":null,"yilEnd":null,"intent":"siralama"}
-Soru: "Antalya domates son 5 yıl trend" -> {"il":"Antalya","ilce":null,"urun":"domates","ortualti":false,"yil":null,"yilStart":${maxYil - 4},"yilEnd":${maxYil},"intent":"trend"}
-Soru: "Antalya örtüaltı domates" -> {"il":"Antalya","ilce":null,"urun":"domates","ortualti":true,"yil":null,"yilStart":null,"yilEnd":null,"intent":"uretim"}
-Soru: "Adana Antalya domates karşılaştır" -> {"il":"Adana","il2":"Antalya","ilce":null,"urun":"domates","ortualti":false,"yil":null,"yilStart":null,"yilEnd":null,"intent":"karsilastirma"}`;
+Soru: "Tarsus'ta domates" -> {"tip":"veri","il":"Mersin","ilce":"Tarsus","urun":"domates","ortualti":false,"yil":null,"yilStart":null,"yilEnd":null,"intent":"uretim"}
+Soru: "Afyonkarahisar buğday üretiminde kaçıncı sırada" -> {"tip":"veri","il":"Afyonkarahisar","ilce":null,"urun":"buğday","ortualti":false,"yil":null,"yilStart":null,"yilEnd":null,"intent":"siralama"}
+Soru: "En çok elma üreten il" -> {"tip":"veri","il":null,"ilce":null,"urun":"elma","ortualti":false,"yil":null,"yilStart":null,"yilEnd":null,"intent":"siralama"}
+Soru: "Antalya domates son 5 yıl trend" -> {"tip":"veri","il":"Antalya","ilce":null,"urun":"domates","ortualti":false,"yil":null,"yilStart":${maxYil - 4},"yilEnd":${maxYil},"intent":"trend"}
+Soru: "Antalya örtüaltı domates" -> {"tip":"veri","il":"Antalya","ilce":null,"urun":"domates","ortualti":true,"yil":null,"yilStart":null,"yilEnd":null,"intent":"uretim"}
+Soru: "Adana Antalya domates karşılaştır" -> {"tip":"veri","il":"Adana","il2":"Antalya","ilce":null,"urun":"domates","ortualti":false,"yil":null,"yilStart":null,"yilEnd":null,"intent":"karsilastirma"}
+Soru: "Domates nasıl yetiştirilir, verimi nasıl artırırım" -> {"tip":"danismanlik","il":null,"ilce":null,"urun":"domates","ortualti":false,"yil":null,"yilStart":null,"yilEnd":null,"intent":"uretim"}
+Soru: "Domates yapraklarında sarı leke var ne yapmalıyım" -> {"tip":"danismanlik","il":null,"ilce":null,"urun":"domates","ortualti":false,"yil":null,"yilStart":null,"yilEnd":null,"intent":"uretim"}
+Soru: "Bu yıl tarlama ne eksem kârlı olur" -> {"tip":"danismanlik","il":null,"ilce":null,"urun":null,"ortualti":false,"yil":null,"yilStart":null,"yilEnd":null,"intent":"uretim"}`;
 
   const resp = await openai.chat.completions.create({
     model: MODEL,
@@ -283,9 +345,20 @@ export default async function handler(req, res) {
     // Dinamik en güncel yıl
     const maxYil = queryAll(db, `SELECT MAX("Yıl") y FROM ${T_IL}`)[0].y;
 
-    // 1) LLM alan çıkarımı
+    // 1) LLM: tip + alan çıkarımı (tek çağrı)
     const f = await extractFields(question, maxYil);
     if (DEBUG) console.log('LLM fields:', JSON.stringify(f));
+
+    // 1.5) [YENİ] ROUTER — danışmanlık sorusu ise bilgi tabanı / grounded LLM ile cevapla
+    if (f.tip === 'danismanlik') {
+      const adv = await answerAdvisory(question);
+      const out = { success: true, answer: adv.answer, mode: 'danismanlik',
+        source: adv.source, processingTime: Date.now() - t0,
+        debug: DEBUG ? { fields: f, konu: adv.konu || null } : null };
+      cSet(question, out);
+      return res.status(200).json(out);
+    }
+    // tip="veri" (veya boş) -> aşağıdaki mevcut SQL path aynen çalışır
 
     // 2) Deterministik çözümleme
     const il = resolveIl(f.il);
@@ -343,7 +416,7 @@ export default async function handler(req, res) {
     catch (e) { console.error('SQL hatası:', e); return res.status(400).json({ error: 'Sorgu çalıştırılamadı', detail: DEBUG ? e.message : undefined }); }
 
     const answer = buildAnswer(p, rows);
-    const out = { success: true, answer, data: rows.slice(0, 10), totalRows: rows.length,
+    const out = { success: true, answer, mode: 'veri', data: rows.slice(0, 10), totalRows: rows.length,
       processingTime: Date.now() - t0, debug: DEBUG ? { fields: f, sql, urunler } : null };
     cSet(question, out);
     res.status(200).json(out);
