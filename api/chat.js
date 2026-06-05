@@ -248,7 +248,7 @@ async function extractFields(question, maxYil) {
   const illerStr = WL.iller.join(', ');
   const sys = `Türkiye tarım sorgularını JSON alanlara ayır. SADECE JSON döndür, açıklama yok.
 Alanlar:
-- "tip": Sorunun türü. "veri" = istatistik/üretim/alan/sıralama/trend/karşılaştırma (sayısal TÜİK verisi istenen sorular). "danismanlik" = nasıl yetiştirilir, hastalık/zararlı mücadelesi, gübreleme, sulama, ne ekmeli tavsiyesi, destek/mevzuat gibi BİLGİ soruları. Emin değilsen "veri" yaz.
+- "tip": Sorunun türü. "veri" = istatistik/üretim/alan/sıralama/trend/karşılaştırma (sayısal TÜİK verisi). "danismanlik" = nasıl yetiştirilir, hastalık/zararlı mücadelesi, gübreleme, sulama, destek/mevzuat gibi BİLGİ soruları. "kazanc" = kârlılık, net kâr, kazanç, "ne ekmeli / hangi ürün kârlı", bir ürünün veya ilin EKONOMİK DEĞERİ gibi para/kârlılık soruları. Emin değilsen "veri" yaz.
 - "il": Soruda geçen il adı (yoksa null). Geçerli iller: ${illerStr}
 - "il2": Karşılaştırma varsa İKİNCİ il (yoksa null).
 - "ilce": Soruda ilçe geçiyorsa adı (yoksa null). İlçe geçerse il düzeyi değil ilçe verisi kullanılır.
@@ -275,7 +275,9 @@ Soru: "Antalya örtüaltı domates" -> {"tip":"veri","il":"Antalya","ilce":null,
 Soru: "Adana Antalya domates karşılaştır" -> {"tip":"veri","il":"Adana","il2":"Antalya","ilce":null,"urun":"domates","ortualti":false,"yil":null,"yilStart":null,"yilEnd":null,"intent":"karsilastirma"}
 Soru: "Domates nasıl yetiştirilir, verimi nasıl artırırım" -> {"tip":"danismanlik","il":null,"ilce":null,"urun":"domates","ortualti":false,"yil":null,"yilStart":null,"yilEnd":null,"intent":"uretim"}
 Soru: "Domates yapraklarında sarı leke var ne yapmalıyım" -> {"tip":"danismanlik","il":null,"ilce":null,"urun":"domates","ortualti":false,"yil":null,"yilStart":null,"yilEnd":null,"intent":"uretim"}
-Soru: "Bu yıl tarlama ne eksem kârlı olur" -> {"tip":"danismanlik","il":null,"ilce":null,"urun":null,"ortualti":false,"yil":null,"yilStart":null,"yilEnd":null,"intent":"uretim"}`;
+Soru: "Bu yıl tarlama ne eksem kârlı olur" -> {"tip":"kazanc","il":null,"ilce":null,"urun":null,"ortualti":false,"yil":null,"yilStart":null,"yilEnd":null,"intent":"uretim"}
+Soru: "Mersin'de ekonomik değeri en yüksek ürün nedir" -> {"tip":"kazanc","il":"Mersin","ilce":null,"urun":null,"ortualti":false,"yil":null,"yilStart":null,"yilEnd":null,"intent":"uretim"}
+Soru: "Sera domatesi dekara kaç para kazandırır" -> {"tip":"kazanc","il":null,"ilce":null,"urun":"domates","ortualti":true,"yil":null,"yilStart":null,"yilEnd":null,"intent":"uretim"}`;
 
   const resp = await openai.chat.completions.create({
     model: MODEL,
@@ -359,7 +361,16 @@ export default async function handler(req, res) {
     const f = await extractFields(question, maxYil);
     if (DEBUG) console.log('LLM fields:', JSON.stringify(f));
 
-    // 1.5) [YENİ] ROUTER — danışmanlık sorusu ise bilgi tabanı / grounded LLM ile cevapla
+    // 1.5) [YENİ] ROUTER
+    // Kazanç/kârlılık sorusu -> "Ne Ekeceğim" widget'ına yönlendir (bot net kâr rakamı vermez)
+    if (f.tip === 'kazanc') {
+      const out = { success: true, mode: 'kazanc', processingTime: Date.now() - t0,
+        answer: 'Kârlılık ve "ne ekmeli" tahminleri için "Ne Ekeceğim, Ne Kazanacağım" aracımıza bakın — orada ürün başına tahmini net kâr, risk ve başabaş fiyatı yer alıyor. Ben üretim, alan, verim ve sıralama sorularında yardımcı olabilirim.',
+        debug: DEBUG ? { fields: f } : null };
+      cSet(question, out);
+      return res.status(200).json(out);
+    }
+    // Danışmanlık sorusu -> bilgi tabanı / grounded LLM
     if (f.tip === 'danismanlik') {
       const adv = await answerAdvisory(question);
       const out = { success: true, answer: adv.answer, mode: 'danismanlik',
