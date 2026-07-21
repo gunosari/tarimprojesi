@@ -234,6 +234,41 @@ function buildSQL(p) {
       ORDER BY deger DESC LIMIT ${limit}`;
   }
 
+  // 1c) ILCE_DAGILIM: "bir ürünün il içindeki ilçelere dağılımı" -> her ilçe ayrı satır
+  // Her zaman ilçe tablosundan; il filtresi + ürün filtresi zorunlu.
+  if (intent === 'ilce_dagilim') {
+    const metrik = p.metrik === 'alan' ? 'SUM("Alan")' : 'SUM("Üretim")';
+    return `SELECT "İlçe" ilce, ${metrik} deger, SUM("Alan") alan, SUM("Üretim") uretim,
+        CASE WHEN SUM("Alan")>0 THEN ROUND(CAST(SUM("Üretim") AS FLOAT)/SUM("Alan")*1000) ELSE 0 END verim
+      FROM ${T_ILCE}
+      WHERE "Yıl"=${yil}${ilFiltre}${urunFiltre}
+      GROUP BY "İlçe" HAVING deger > 0
+      ORDER BY deger DESC`;
+  }
+
+  // 1d) VERIM: verimlilik (kg/dekar) sıralaması.
+  // Ürün YOKSA: il içindeki ürünleri verime göre sırala.
+  // Ürün VARSA: o ürünün ilçelerini verime göre sırala (kds_ilce).
+  if (intent === 'verim') {
+    const verimExpr = `CASE WHEN SUM("Alan")>0 THEN ROUND(CAST(SUM("Üretim") AS FLOAT)/SUM("Alan")*1000) ELSE 0 END`;
+    // Ürün belirtilmiş mi? (urunler dizisi dolu veya grup)
+    const urunVar = grup || (urunler && urunler.length);
+    if (urunVar) {
+      // Ürün verilmiş -> ilçe bazlı verim sıralaması
+      return `SELECT "İlçe" ilce, ${verimExpr} verim, SUM("Üretim") uretim, SUM("Alan") alan
+        FROM ${T_ILCE}
+        WHERE "Yıl"=${yil}${ilFiltre}${urunFiltre}
+        GROUP BY "İlçe" HAVING SUM("Alan") > 0
+        ORDER BY verim DESC LIMIT 10`;
+    }
+    // Ürün yok -> il içindeki ürünleri verime göre sırala
+    return `SELECT "Ürün" urun, ${verimExpr} verim, SUM("Üretim") uretim, SUM("Alan") alan
+      FROM ${tablo}
+      WHERE "Yıl"=${yil}${ilFiltre}${ilceFiltre}
+      GROUP BY "Ürün" HAVING SUM("Alan") > 100
+      ORDER BY verim DESC LIMIT 10`;
+  }
+
   // 2) TREND: çok yıllı üretim (sadece il tablosu, 2014-2025)
   if (intent === 'trend') {
     return `SELECT "Yıl" yil, SUM("Üretim") tpl, SUM("Alan") alan
@@ -268,26 +303,33 @@ Alanlar:
 - "ortualti": Soru sera/örtüaltı içeriyorsa true, değilse false.
 - "yil": Tek yıl geçiyorsa (örn 2023) o sayı; geçmiyorsa null.
 - "yilStart","yilEnd": Aralık/trend varsa (örn "son 5 yıl","2020-2024 arası") başlangıç ve bitiş; yoksa null.
-- "intent": "uretim" | "alan" | "siralama" | "urun_top" | "trend" | "karsilastirma". (tip="danismanlik" ise önemsiz, "uretim" yazabilirsin.)
+- "intent": "uretim" | "alan" | "siralama" | "urun_top" | "ilce_dagilim" | "verim" | "trend" | "karsilastirma". (tip="danismanlik" ise önemsiz, "uretim" yazabilirsin.)
    * "karşılaştır","kıyasla","hangisi daha çok","X mi Y mi" + iki il -> "karsilastirma"
    * BİR ÜRÜNÜ en çok üreten/ekilen İLLER (ürün belli, il aranıyor): "en çok elma üreten il","limon üretiminde kaçıncı" -> "siralama"
    * BİR İL/İLÇEDE en çok üretilen/ekilen ÜRÜNLER (il belli, ürünler listeleniyor): "Mersin'de en çok üretilen 5 ürün","Tarsus'ta en çok ekilen ürünler","Konya'da hangi ürünler öne çıkıyor" -> "urun_top"
+   * BİR ÜRÜNÜN bir ilin İLÇELERİNE dağılımı (il + ürün belli, ilçeler listeleniyor): "Mersin ilçelerinde domates","limon hangi ilçelerde","Mersin'de domates ilçe dağılımı","hangi ilçe en çok üretiyor" -> "ilce_dagilim"
+   * VERİMLİLİK (kg/dekar, "en verimli","verim","dekar başına"): "Mersin'de en verimli ürün","hangi ilçe domateste en verimli","verimi en yüksek" -> "verim"
    * "trend","yıllara göre","son N yıl","değişim","artış" -> "trend"
    * tek ürünün "alan","kaç dekar","ekili alan" değeri -> "alan"
    * diğer hepsi -> "uretim"
-- "metrik": SADECE intent="urun_top" için. "uretim" (varsayılan, ton) veya "alan" (dekar). "en çok ekilen","alana göre","en geniş alan" -> "alan"; "en çok üretilen","en çok yetişen" -> "uretim".
+- "metrik": intent="urun_top" VEYA "ilce_dagilim" için. "uretim" (varsayılan, ton) veya "alan" (dekar). "en çok ekilen","alana göre","en geniş alan" -> "alan"; "en çok üretilen","en çok yetişen" -> "uretim".
 - "limit": SADECE intent="urun_top" için kaç ürün istendiği (örn "ilk 5"->5, "en çok 10 ürün"->10). Belirtilmezse 5.
 Kurallar: Yazım hatalarını düzelt (anakara->ankara, kaysı->kayısı). En güncel yıl ${maxYil}.
+NOT: "ilce_dagilim" için bir il ADI ŞART (ilçeleri o ile göre listeleriz). "ilce" alanı null olmalı — çünkü tek ilçe değil TÜM ilçeler isteniyor.
 Örnekler:
 Soru: "Mersin limon üretimi" -> {"tip":"veri","il":"Mersin","ilce":null,"urun":"limon","ortualti":false,"yil":null,"yilStart":null,"yilEnd":null,"intent":"uretim"}
 Soru: "Mersin sebze üretimi" -> {"tip":"veri","il":"Mersin","ilce":null,"urun":"sebze","ortualti":false,"yil":null,"yilStart":null,"yilEnd":null,"intent":"uretim"}
 Not: "sebze","meyve","tahıl" birer üründür değil GRUP'tur; yine de "urun" alanına o kelimeyi yaz.
 Soru: "Tarsus'ta domates" -> {"tip":"veri","il":"Mersin","ilce":"Tarsus","urun":"domates","ortualti":false,"yil":null,"yilStart":null,"yilEnd":null,"intent":"uretim"}
+Soru: "Mersin ilçelerinde üretilen domates" -> {"tip":"veri","il":"Mersin","ilce":null,"urun":"domates","ortualti":false,"yil":null,"yilStart":null,"yilEnd":null,"intent":"ilce_dagilim","metrik":"uretim"}
+Soru: "Limon Mersin'de hangi ilçelerde en çok ekiliyor" -> {"tip":"veri","il":"Mersin","ilce":null,"urun":"limon","ortualti":false,"yil":null,"yilStart":null,"yilEnd":null,"intent":"ilce_dagilim","metrik":"alan"}
 Soru: "Afyonkarahisar buğday üretiminde kaçıncı sırada" -> {"tip":"veri","il":"Afyonkarahisar","ilce":null,"urun":"buğday","ortualti":false,"yil":null,"yilStart":null,"yilEnd":null,"intent":"siralama"}
 Soru: "En çok elma üreten il" -> {"tip":"veri","il":null,"ilce":null,"urun":"elma","ortualti":false,"yil":null,"yilStart":null,"yilEnd":null,"intent":"siralama"}
 Soru: "Mersin'de en çok üretilen 5 ürün" -> {"tip":"veri","il":"Mersin","ilce":null,"urun":null,"ortualti":false,"yil":null,"yilStart":null,"yilEnd":null,"intent":"urun_top","metrik":"uretim","limit":5}
 Soru: "Konya'da en çok ekilen ürünler" -> {"tip":"veri","il":"Konya","ilce":null,"urun":null,"ortualti":false,"yil":null,"yilStart":null,"yilEnd":null,"intent":"urun_top","metrik":"alan","limit":5}
 Soru: "Tarsus'ta alana göre ilk 10 ürün" -> {"tip":"veri","il":"Mersin","ilce":"Tarsus","urun":null,"ortualti":false,"yil":null,"yilStart":null,"yilEnd":null,"intent":"urun_top","metrik":"alan","limit":10}
+Soru: "Mersin'de en verimli ürün" -> {"tip":"veri","il":"Mersin","ilce":null,"urun":null,"ortualti":false,"yil":null,"yilStart":null,"yilEnd":null,"intent":"verim"}
+Soru: "Hangi ilçe domateste en verimli" -> {"tip":"veri","il":"Mersin","ilce":null,"urun":"domates","ortualti":false,"yil":null,"yilStart":null,"yilEnd":null,"intent":"verim"}
 Soru: "Antalya domates son 5 yıl trend" -> {"tip":"veri","il":"Antalya","ilce":null,"urun":"domates","ortualti":false,"yil":null,"yilStart":${maxYil - 4},"yilEnd":${maxYil},"intent":"trend"}
 Soru: "Antalya örtüaltı domates" -> {"tip":"veri","il":"Antalya","ilce":null,"urun":"domates","ortualti":true,"yil":null,"yilStart":null,"yilEnd":null,"intent":"uretim"}
 Soru: "Adana Antalya domates karşılaştır" -> {"tip":"veri","il":"Adana","il2":"Antalya","ilce":null,"urun":"domates","ortualti":false,"yil":null,"yilStart":null,"yilEnd":null,"intent":"karsilastirma"}
@@ -335,6 +377,28 @@ function buildAnswer(p, rows) {
       return `${i + 1}. ${r.urun} (${ana})`;
     }).join('\n');
     return `${yer} ${p.yil} yılı ${baslik} ${rows.length} ürün:\n${lst}`;
+  }
+  if (p.intent === 'ilce_dagilim') {
+    const alanBazli = p.metrik === 'alan';
+    const toplam = rows.reduce((s, r) => s + (alanBazli ? r.alan : r.uretim), 0);
+    const birim = alanBazli ? 'ekili alanı' : 'üretimi';
+    const lst = rows.map((r, i) => {
+      const ana = alanBazli ? `${fmt(r.alan)} dekar` : `${fmt(r.uretim)} ton`;
+      const pay = toplam > 0 ? Math.round((alanBazli ? r.alan : r.uretim) / toplam * 100) : 0;
+      return `${i + 1}. ${r.ilce}: ${ana} (%${pay})`;
+    }).join('\n');
+    const toplamStr = alanBazli ? `${fmt(toplam)} dekar` : `${fmt(toplam)} ton`;
+    return `${p.il} ilçelerinde ${p.yil} yılı ${urunAd} ${birim} (toplam ${toplamStr}):\n${lst}`;
+  }
+  if (p.intent === 'verim') {
+    // Ürün verilmişse ilçe bazlı (r.ilce), verilmemişse ürün bazlı (r.urun)
+    const ilceBazli = rows[0] && rows[0].ilce !== undefined;
+    if (ilceBazli) {
+      const lst = rows.map((r, i) => `${i + 1}. ${r.ilce}: ${fmt(r.verim)} kg/dekar (${fmt(r.uretim)} ton)`).join('\n');
+      return `${p.il} ilçelerinde ${p.yil} yılı ${urunAd} veriminde en yüksek:\n${lst}`;
+    }
+    const lst = rows.map((r, i) => `${i + 1}. ${r.urun}: ${fmt(r.verim)} kg/dekar`).join('\n');
+    return `${yer} ${p.yil} yılı en verimli ürünler (kg/dekar):\n${lst}`;
   }
   if (p.intent === 'trend') {
     const lst = rows.map(r => `${r.yil}: ${fmt(r.tpl)} ton`).join('\n');
@@ -449,6 +513,12 @@ export default async function handler(req, res) {
       sql = `SELECT "İl" il, SUM("Üretim") tpl, SUM("Alan") alan
         FROM ${T_IL} WHERE "Yıl"=${yil} AND "İl" IN ('${il.replace(/'/g, "''")}','${il2.replace(/'/g, "''")}')${prodFiltre}
         GROUP BY "İl" ORDER BY tpl DESC`;
+    } else if (p.intent === 'ilce_dagilim') {
+      // İlçe dağılımı her zaman buildSQL'de kds_ilce üzerinden — örtüaltı dalına düşmesin
+      sql = buildSQL(p);
+    } else if (p.intent === 'verim') {
+      // Verim sıralaması buildSQL'de ele alınıyor — örtüaltı dalına düşmesin
+      sql = buildSQL(p);
     } else if (ilGeneliOrtu) {
       const ilFiltre = il ? ` AND "İl"='${il.replace(/'/g, "''")}'` : '';
       sql = `SELECT SUM("Üretim") uretim, SUM("Alan") alan,
