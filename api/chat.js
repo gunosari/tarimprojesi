@@ -222,6 +222,18 @@ function buildSQL(p) {
     return `${cte} SELECT il, tpl, sira FROM r ORDER BY sira LIMIT 5`;   // "en çok"
   }
 
+  // 1b) URUN_TOP: "bir il/ilçede en çok üretilen/ekilen N ürün" -> ürünleri sırala
+  // metrik: üretim (ton) veya alan (dekar). ortalti filtresi de uygulanır.
+  if (intent === 'urun_top') {
+    const metrik = p.metrik === 'alan' ? 'SUM("Alan")' : 'SUM("Üretim")';
+    const limit = p.limit && p.limit > 0 && p.limit <= 20 ? p.limit : 5;
+    return `SELECT "Ürün" urun, ${metrik} deger, SUM("Alan") alan, SUM("Üretim") uretim
+      FROM ${tablo}
+      WHERE "Yıl"=${yil}${ilFiltre}${ilceFiltre}${urunFiltre}
+      GROUP BY "Ürün" HAVING deger > 0
+      ORDER BY deger DESC LIMIT ${limit}`;
+  }
+
   // 2) TREND: çok yıllı üretim (sadece il tablosu, 2014-2025)
   if (intent === 'trend') {
     return `SELECT "Yıl" yil, SUM("Üretim") tpl, SUM("Alan") alan
@@ -256,12 +268,15 @@ Alanlar:
 - "ortualti": Soru sera/örtüaltı içeriyorsa true, değilse false.
 - "yil": Tek yıl geçiyorsa (örn 2023) o sayı; geçmiyorsa null.
 - "yilStart","yilEnd": Aralık/trend varsa (örn "son 5 yıl","2020-2024 arası") başlangıç ve bitiş; yoksa null.
-- "intent": "uretim" | "alan" | "siralama" | "trend" | "karsilastirma". (tip="danismanlik" ise önemsiz, "uretim" yazabilirsin.)
+- "intent": "uretim" | "alan" | "siralama" | "urun_top" | "trend" | "karsilastirma". (tip="danismanlik" ise önemsiz, "uretim" yazabilirsin.)
    * "karşılaştır","kıyasla","hangisi daha çok","X mi Y mi" + iki il -> "karsilastirma"
-   * "kaçıncı","sıralama","en çok","lider" -> "siralama"
+   * BİR ÜRÜNÜ en çok üreten/ekilen İLLER (ürün belli, il aranıyor): "en çok elma üreten il","limon üretiminde kaçıncı" -> "siralama"
+   * BİR İL/İLÇEDE en çok üretilen/ekilen ÜRÜNLER (il belli, ürünler listeleniyor): "Mersin'de en çok üretilen 5 ürün","Tarsus'ta en çok ekilen ürünler","Konya'da hangi ürünler öne çıkıyor" -> "urun_top"
    * "trend","yıllara göre","son N yıl","değişim","artış" -> "trend"
-   * "alan","kaç dekar","ekili alan" -> "alan"
+   * tek ürünün "alan","kaç dekar","ekili alan" değeri -> "alan"
    * diğer hepsi -> "uretim"
+- "metrik": SADECE intent="urun_top" için. "uretim" (varsayılan, ton) veya "alan" (dekar). "en çok ekilen","alana göre","en geniş alan" -> "alan"; "en çok üretilen","en çok yetişen" -> "uretim".
+- "limit": SADECE intent="urun_top" için kaç ürün istendiği (örn "ilk 5"->5, "en çok 10 ürün"->10). Belirtilmezse 5.
 Kurallar: Yazım hatalarını düzelt (anakara->ankara, kaysı->kayısı). En güncel yıl ${maxYil}.
 Örnekler:
 Soru: "Mersin limon üretimi" -> {"tip":"veri","il":"Mersin","ilce":null,"urun":"limon","ortualti":false,"yil":null,"yilStart":null,"yilEnd":null,"intent":"uretim"}
@@ -270,6 +285,9 @@ Not: "sebze","meyve","tahıl" birer üründür değil GRUP'tur; yine de "urun" a
 Soru: "Tarsus'ta domates" -> {"tip":"veri","il":"Mersin","ilce":"Tarsus","urun":"domates","ortualti":false,"yil":null,"yilStart":null,"yilEnd":null,"intent":"uretim"}
 Soru: "Afyonkarahisar buğday üretiminde kaçıncı sırada" -> {"tip":"veri","il":"Afyonkarahisar","ilce":null,"urun":"buğday","ortualti":false,"yil":null,"yilStart":null,"yilEnd":null,"intent":"siralama"}
 Soru: "En çok elma üreten il" -> {"tip":"veri","il":null,"ilce":null,"urun":"elma","ortualti":false,"yil":null,"yilStart":null,"yilEnd":null,"intent":"siralama"}
+Soru: "Mersin'de en çok üretilen 5 ürün" -> {"tip":"veri","il":"Mersin","ilce":null,"urun":null,"ortualti":false,"yil":null,"yilStart":null,"yilEnd":null,"intent":"urun_top","metrik":"uretim","limit":5}
+Soru: "Konya'da en çok ekilen ürünler" -> {"tip":"veri","il":"Konya","ilce":null,"urun":null,"ortualti":false,"yil":null,"yilStart":null,"yilEnd":null,"intent":"urun_top","metrik":"alan","limit":5}
+Soru: "Tarsus'ta alana göre ilk 10 ürün" -> {"tip":"veri","il":"Mersin","ilce":"Tarsus","urun":null,"ortualti":false,"yil":null,"yilStart":null,"yilEnd":null,"intent":"urun_top","metrik":"alan","limit":10}
 Soru: "Antalya domates son 5 yıl trend" -> {"tip":"veri","il":"Antalya","ilce":null,"urun":"domates","ortualti":false,"yil":null,"yilStart":${maxYil - 4},"yilEnd":${maxYil},"intent":"trend"}
 Soru: "Antalya örtüaltı domates" -> {"tip":"veri","il":"Antalya","ilce":null,"urun":"domates","ortualti":true,"yil":null,"yilStart":null,"yilEnd":null,"intent":"uretim"}
 Soru: "Adana Antalya domates karşılaştır" -> {"tip":"veri","il":"Adana","il2":"Antalya","ilce":null,"urun":"domates","ortualti":false,"yil":null,"yilStart":null,"yilEnd":null,"intent":"karsilastirma"}
@@ -308,6 +326,15 @@ function buildAnswer(p, rows) {
     if (p.il && rows[0].sira) return `${rows[0].il}, ${p.yil} yılı ${urunAd} üretiminde ${rows[0].sira}. sırada (${fmt(rows[0].tpl)} ton).`;
     const lst = rows.map((r, i) => `${i + 1}. ${r.il} (${fmt(r.tpl)} ton)`).join('\n');
     return `${p.yil} yılı en çok ${urunAd} üreten iller:\n${lst}`;
+  }
+  if (p.intent === 'urun_top') {
+    const alanBazli = p.metrik === 'alan';
+    const baslik = alanBazli ? 'en çok ekilen' : 'en çok üretilen';
+    const lst = rows.map((r, i) => {
+      const ana = alanBazli ? `${fmt(r.alan)} dekar` : `${fmt(r.uretim)} ton`;
+      return `${i + 1}. ${r.urun} (${ana})`;
+    }).join('\n');
+    return `${yer} ${p.yil} yılı ${baslik} ${rows.length} ürün:\n${lst}`;
   }
   if (p.intent === 'trend') {
     const lst = rows.map(r => `${r.yil}: ${fmt(r.tpl)} ton`).join('\n');
@@ -403,11 +430,12 @@ export default async function handler(req, res) {
     const p = {
       il, il2, ilce: ilce || null, urunler, grup,
       urunEtiket: grup ? norm(f.urun) : (f.urun || 'ürün'),
-      yil, yilStart, yilEnd, intent: f.intent || 'uretim'
+      yil, yilStart, yilEnd, intent: f.intent || 'uretim',
+      metrik: f.metrik || 'uretim', limit: f.limit || 5
     };
 
-    // "Bulunamadı" sadece: grup değil, örtüaltı değil, ürün verilmiş ama eşleşme yok
-    if (!grup && !f.ortualti && !urunler.length && f.urun)
+    // urun_top: ürün belirtmeye gerek yok (tüm ürünleri sıralıyoruz) — "bulunamadı" kontrolünü atla
+    if (!grup && !f.ortualti && !urunler.length && f.urun && p.intent !== 'urun_top')
       return res.status(200).json({ success: true, answer: `"${f.urun}" için eşleşen ürün bulunamadı. Daha genel bir ad deneyin (örn "elma","domates","sebze").`, processingTime: Date.now() - t0 });
 
     // 3) SQL kur
