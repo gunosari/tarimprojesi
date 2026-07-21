@@ -247,21 +247,23 @@ function buildSQL(p) {
   }
 
   // 1d) VERIM: verimlilik (kg/dekar) sıralaması.
-  // Ürün YOKSA: il içindeki ürünleri verime göre sırala.
-  // Ürün VARSA: o ürünün ilçelerini verime göre sırala (kds_ilce).
+  // ürün VAR + il YOK: TÜM Türkiye ilçeleri arası verim (kds_ilce, 81 il mevcut)
+  // ürün VAR + il VAR: o ilin ilçeleri (kds_ilce)
+  // ürün YOK + il VAR: o ilin ürünleri
+  // ürün YOK + il YOK: Türkiye geneli ürünler
   if (intent === 'verim') {
     const verimExpr = `CASE WHEN SUM("Alan")>0 THEN ROUND(CAST(SUM("Üretim") AS FLOAT)/SUM("Alan")*1000) ELSE 0 END`;
-    // Ürün belirtilmiş mi? (urunler dizisi dolu veya grup)
     const urunVar = grup || (urunler && urunler.length);
+
     if (urunVar) {
-      // Ürün verilmiş -> ilçe bazlı verim sıralaması
-      return `SELECT "İlçe" ilce, ${verimExpr} verim, SUM("Üretim") uretim, SUM("Alan") alan
+      // Ürün var -> ilçe bazlı verim (il varsa o il, yoksa tüm Türkiye)
+      return `SELECT "İlçe" ilce, "İl" il, ${verimExpr} verim, SUM("Üretim") uretim, SUM("Alan") alan
         FROM ${T_ILCE}
         WHERE "Yıl"=${yil}${ilFiltre}${urunFiltre}
-        GROUP BY "İlçe" HAVING SUM("Alan") > 0
+        GROUP BY "İlçe", "İl" HAVING SUM("Alan") > 100
         ORDER BY verim DESC LIMIT 10`;
     }
-    // Ürün yok -> il içindeki ürünleri verime göre sırala
+    // Ürün yok -> ürünleri verime göre sırala (il varsa o il, yoksa Türkiye)
     return `SELECT "Ürün" urun, ${verimExpr} verim, SUM("Üretim") uretim, SUM("Alan") alan
       FROM ${tablo}
       WHERE "Yıl"=${yil}${ilFiltre}${ilceFiltre}
@@ -329,7 +331,8 @@ Soru: "Mersin'de en çok üretilen 5 ürün" -> {"tip":"veri","il":"Mersin","ilc
 Soru: "Konya'da en çok ekilen ürünler" -> {"tip":"veri","il":"Konya","ilce":null,"urun":null,"ortualti":false,"yil":null,"yilStart":null,"yilEnd":null,"intent":"urun_top","metrik":"alan","limit":5}
 Soru: "Tarsus'ta alana göre ilk 10 ürün" -> {"tip":"veri","il":"Mersin","ilce":"Tarsus","urun":null,"ortualti":false,"yil":null,"yilStart":null,"yilEnd":null,"intent":"urun_top","metrik":"alan","limit":10}
 Soru: "Mersin'de en verimli ürün" -> {"tip":"veri","il":"Mersin","ilce":null,"urun":null,"ortualti":false,"yil":null,"yilStart":null,"yilEnd":null,"intent":"verim"}
-Soru: "Hangi ilçe domateste en verimli" -> {"tip":"veri","il":"Mersin","ilce":null,"urun":"domates","ortualti":false,"yil":null,"yilStart":null,"yilEnd":null,"intent":"verim"}
+Soru: "Hangi ilçe domateste en verimli" -> {"tip":"veri","il":null,"ilce":null,"urun":"domates","ortualti":false,"yil":null,"yilStart":null,"yilEnd":null,"intent":"verim"}
+Soru: "Mersin'de hangi ilçe domateste en verimli" -> {"tip":"veri","il":"Mersin","ilce":null,"urun":"domates","ortualti":false,"yil":null,"yilStart":null,"yilEnd":null,"intent":"verim"}
 Soru: "Antalya domates son 5 yıl trend" -> {"tip":"veri","il":"Antalya","ilce":null,"urun":"domates","ortualti":false,"yil":null,"yilStart":${maxYil - 4},"yilEnd":${maxYil},"intent":"trend"}
 Soru: "Antalya örtüaltı domates" -> {"tip":"veri","il":"Antalya","ilce":null,"urun":"domates","ortualti":true,"yil":null,"yilStart":null,"yilEnd":null,"intent":"uretim"}
 Soru: "Adana Antalya domates karşılaştır" -> {"tip":"veri","il":"Adana","il2":"Antalya","ilce":null,"urun":"domates","ortualti":false,"yil":null,"yilStart":null,"yilEnd":null,"intent":"karsilastirma"}
@@ -391,11 +394,15 @@ function buildAnswer(p, rows) {
     return `${p.il} ilçelerinde ${p.yil} yılı ${urunAd} ${birim} (toplam ${toplamStr}):\n${lst}`;
   }
   if (p.intent === 'verim') {
-    // Ürün verilmişse ilçe bazlı (r.ilce), verilmemişse ürün bazlı (r.urun)
-    const ilceBazli = rows[0] && rows[0].ilce !== undefined;
-    if (ilceBazli) {
-      const lst = rows.map((r, i) => `${i + 1}. ${r.ilce}: ${fmt(r.verim)} kg/dekar (${fmt(r.uretim)} ton)`).join('\n');
-      return `${p.il} ilçelerinde ${p.yil} yılı ${urunAd} veriminde en yüksek:\n${lst}`;
+    // Ürün varsa ilçe bazlı (r.ilce + r.il), ürün yoksa ürün bazlı (r.urun)
+    if (rows[0] && rows[0].ilce !== undefined) {
+      const lst = rows.map((r, i) => {
+        // İl belirtilmemişse "İlçe (İl)", belirtilmişse sadece "İlçe"
+        const yerAd = p.il ? r.ilce : `${r.ilce} (${r.il})`;
+        return `${i + 1}. ${yerAd}: ${fmt(r.verim)} kg/dekar (${fmt(r.uretim)} ton)`;
+      }).join('\n');
+      const kapsam = p.il ? `${p.il} ilçelerinde` : 'Türkiye ilçelerinde';
+      return `${kapsam} ${p.yil} yılı ${urunAd} veriminde en yüksek:\n${lst}`;
     }
     const lst = rows.map((r, i) => `${i + 1}. ${r.urun}: ${fmt(r.verim)} kg/dekar`).join('\n');
     return `${yer} ${p.yil} yılı en verimli ürünler (kg/dekar):\n${lst}`;
