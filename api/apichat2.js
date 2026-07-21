@@ -9,7 +9,7 @@ import Anthropic from '@anthropic-ai/sdk';
 
 /** ======= CONFIG ======= */
 const DB_FILE = 'kds_vt.db';
-const MODEL = 'claude-sonnet-4-20250514';
+const MODEL = 'claude-sonnet-4-6';
 const MAX_TOKENS = 5000;
 // Sadece bu kaynaklar API'yi çağırabilir — '*' kaldırıldı, Claude maliyeti kötüye kullanıma kapalı
 const ALLOWED_ORIGINS = [
