@@ -304,7 +304,7 @@
   <div class="container">
     <div class="hero">
       <h1>🌾 NeoBi Karar Destek Sistemi</h1>
-      <p>Yapay Zeka Destekli Tarımsal Analiz ve Karar Kartları</p>
+      <p>Yapay zeka destekli tarımsal analiz ve karar kartları</p>
     </div>
 
     <div class="card">
@@ -398,38 +398,98 @@
       document.getElementById('loadingBox').classList.add('active');
       document.getElementById('analyzeBtn').disabled = true;
 
+      // Sonuç kutusunu hazırla — metin akarken burada birikecek
+      const contentEl = document.getElementById('analysisContent');
+      contentEl.innerHTML = '';
+      let fullText = '';        // akan ham markdown
+      let started = false;      // ilk parça geldiğinde loading'i kapat
+
       try {
         const res = await fetch(API_URL, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ tip: currentTip, secim })
         });
-        const data = await res.json();
-        data.success ? showResult(data) : showError(data.error || 'Analiz oluşturulamadı');
+
+        if (!res.ok || !res.body) {
+          // Stream yoksa hata metnini oku
+          const txt = await res.text();
+          throw new Error(txt || `HTTP ${res.status}`);
+        }
+
+        // SSE akışını oku
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+          // SSE mesajları "\n\n" ile ayrılır
+          const parts = buffer.split('\n\n');
+          buffer = parts.pop();  // son yarım parçayı sakla
+
+          for (const part of parts) {
+            const line = part.trim();
+            if (!line.startsWith('data:')) continue;
+            const payload = line.slice(5).trim();
+            if (!payload) continue;
+
+            let msg;
+            try { msg = JSON.parse(payload); } catch { continue; }
+
+            if (msg.type === 'meta') {
+              // Başlık + ham veriler
+              document.getElementById('resultTitle').textContent =
+                `${msg.secim} ${msg.tip === 'il' ? 'İli' : 'Ürünü'} Analizi`;
+              document.getElementById('resultBadge').textContent =
+                msg.tip === 'il' ? 'İl Analizi' : 'Ürün Analizi';
+              if (msg.veriler) {
+                document.getElementById('dataGrid').innerHTML = msg.veriler.map(v => `
+                  <div class="data-item">
+                    <div class="data-item-title">${v.soru}</div>
+                    <div class="data-item-content">${fmtData(v.sonuc)}</div>
+                  </div>
+                `).join('');
+              }
+            }
+            else if (msg.type === 'chunk') {
+              if (!started) {
+                started = true;
+                document.getElementById('loadingBox').classList.remove('active');
+                document.getElementById('resultBox').classList.add('active');
+                // Cache'ten geldiyse başlık meta olmadan gelebilir — güvence
+                if (!document.getElementById('resultTitle').textContent.includes(secim)) {
+                  document.getElementById('resultTitle').textContent =
+                    `${secim} ${currentTip === 'il' ? 'İli' : 'Ürünü'} Analizi`;
+                  document.getElementById('resultBadge').textContent =
+                    currentTip === 'il' ? 'İl Analizi' : 'Ürün Analizi';
+                }
+              }
+              fullText += msg.text;
+              contentEl.innerHTML = mdToHtml(fullText);  // her parçada yeniden render
+              contentEl.scrollIntoView({ block: 'nearest' });
+            }
+            else if (msg.type === 'error') {
+              throw new Error(msg.error || 'Analiz oluşturulamadı');
+            }
+            else if (msg.type === 'done') {
+              // Akış bitti
+            }
+          }
+        }
+
+        if (!started) throw new Error('Boş yanıt alındı');
+
       } catch(e) {
-        showError('Bağlantı hatası: ' + e.message);
+        document.getElementById('resultBox').classList.remove('active');
+        showError('Hata: ' + e.message);
       } finally {
         document.getElementById('loadingBox').classList.remove('active');
         document.getElementById('analyzeBtn').disabled = false;
       }
-    }
-
-    function showResult(data) {
-      document.getElementById('resultTitle').textContent =
-        `${data.secim} ${data.tip === 'il' ? 'İli' : 'Ürünü'} Analizi`;
-      document.getElementById('resultBadge').textContent =
-        data.tip === 'il' ? 'İl Analizi' : 'Ürün Analizi';
-      document.getElementById('analysisContent').innerHTML = mdToHtml(data.analiz);
-
-      if (data.veriler) {
-        document.getElementById('dataGrid').innerHTML = data.veriler.map(v => `
-          <div class="data-item">
-            <div class="data-item-title">${v.soru}</div>
-            <div class="data-item-content">${fmtData(v.sonuc)}</div>
-          </div>
-        `).join('');
-      }
-      document.getElementById('resultBox').classList.add('active');
     }
 
     function mdToHtml(md) {
