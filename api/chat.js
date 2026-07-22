@@ -153,7 +153,18 @@ const ALIAS = {
   'soğan':   ['Soğan Kuru','Soğan Taze'],
   'arpa':    ['Arpa Diğer','Arpa Biralık'],
   'zeytin':  ['Sofralık Zeytinler'],   // yağlık adı kısalmış olabilir; fallback yakalar
-  'incir':   ['İncir Yaş']
+  'incir':   ['İncir Yaş'],
+  // Halk adı ≠ TÜİK adı olanlar
+  'salatalık': ['Hıyar Sofralık','Hıyar Turşuluk'],
+  'hıyar':     ['Hıyar Sofralık','Hıyar Turşuluk'],
+  'pirinç':    ['Çeltik'],
+  'antepfıstığı': ['Şam Fıstığı Antep Fıstığı'],
+  'antep fıstığı':['Şam Fıstığı Antep Fıstığı'],
+  'kolza':     ['Kanola Veya Kolza Tohumu'],
+  'kanola':    ['Kanola Veya Kolza Tohumu'],
+  // Çok varyantlı narenciye — fallback yerine net liste
+  'mandalina': ['Mandalina Diğer','Mandalina Klemantin','Mandalina Satsuma','Mandalina King'],
+  'portakal':  ['Portakal Washington','Portakal Yafa','Diğer Portakallar']
 };
 // Fallback substring eşleşmesinde GENEL terim için asla katılmayacaklar:
 const HARIC = new Set([
@@ -505,10 +516,13 @@ function buildAnswer(p, rows) {
     const lst = rows.map((r, i) =>
       `${i + 1}. ${r.etiket}: ${fmt(r.uretim)} ton (alan ${fmt(r.alan)} dekar, verim ${fmt(r.verim)} kg/dekar)`
     ).join('\n');
-    // Sorulan ama o il/yılda verisi olmayan ürünler
+    // Sorulan ama sonuçta yer almayan ürünler — iki farklı sebep
     const gelen = rows.map(r => r.etiket);
-    const eksik = (p.urunListesi || []).map(g => g.etiket).filter(e => !gelen.includes(e));
-    const eksikNot = eksik.length ? `\n\n(${eksik.join(', ')} için ${yer} ${p.yil} yılında üretim kaydı yok.)` : '';
+    const verisiYok = (p.urunListesi || []).map(g => g.etiket).filter(e => !gelen.includes(e));
+    const notlar = [];
+    if (verisiYok.length) notlar.push(`${verisiYok.join(', ')} için ${yer} ${p.yil} yılında üretim kaydı yok`);
+    if (p.cozulmeyenUrun && p.cozulmeyenUrun.length) notlar.push(`"${p.cozulmeyenUrun.join('", "')}" ürün olarak tanınmadı`);
+    const eksikNot = notlar.length ? `\n\n(${notlar.join('; ')}.)` : '';
 
     let sonuc = '';
     if (rows.length >= 2 && rows[1].uretim > 0) {
@@ -612,17 +626,17 @@ export default async function handler(req, res) {
     }
 
     // Çoklu ürün karşılaştırma: her terimi ayrı ayrı çözümle, etiketiyle sakla
-    // [{etiket:'limon', urunler:['Limon Ve Misket Limonu']}, ...] — boş çözümlenenler elenir
-    let urunListesi = null;
+    // [{etiket:'limon', urunler:['Limon Ve Misket Limonu']}, ...] — çözümlenemeyenler ayrıca not edilir
+    let urunListesi = null, cozulmeyenUrun = [];
     if (f.intent === 'urun_karsilastirma' && Array.isArray(f.urunListesi)) {
       const set = ilceSet ? WL.urunIlceSet : WL.urunIlSet;
-      urunListesi = f.urunListesi
-        .map(t => ({ etiket: String(t).trim(), urunler: resolveUrun(t, set) }))
-        .filter(g => g.etiket && g.urunler.length);
+      const hepsi = f.urunListesi.map(t => ({ etiket: String(t).trim(), urunler: resolveUrun(t, set) }));
+      urunListesi = hepsi.filter(g => g.etiket && g.urunler.length);
+      cozulmeyenUrun = hepsi.filter(g => g.etiket && !g.urunler.length).map(g => g.etiket);
     }
 
     const p = {
-      il, il2, ilce: ilce || null, urunler, grup, urunListesi,
+      il, il2, ilce: ilce || null, urunler, grup, urunListesi, cozulmeyenUrun,
       urunEtiket: grup ? norm(f.urun) : (f.urun || 'ürün'),
       yil, yilStart, yilEnd, intent: f.intent || 'uretim',
       metrik: f.metrik || 'uretim', limit: f.limit || 5, yon: f.yon || 'artan'
@@ -630,12 +644,9 @@ export default async function handler(req, res) {
 
     // Çoklu karşılaştırmada en az 2 ürün çözümlenmeli
     if (p.intent === 'urun_karsilastirma' && (!urunListesi || urunListesi.length < 2)) {
-      const cozulen = urunListesi ? urunListesi.map(g => g.etiket) : [];
-      const istenen = Array.isArray(f.urunListesi) ? f.urunListesi : [];
-      const eksik = istenen.filter(t => !cozulen.includes(String(t).trim()));
       return res.status(200).json({ success: true, processingTime: Date.now() - t0,
-        answer: eksik.length
-          ? `Karşılaştırma için en az iki ürün gerekli; "${eksik.join('", "')}" için eşleşen ürün bulunamadı.`
+        answer: cozulmeyenUrun.length
+          ? `Karşılaştırma için en az iki ürün gerekli; "${cozulmeyenUrun.join('", "')}" için eşleşen ürün bulunamadı.`
           : 'Karşılaştırma için en az iki ürün belirtin (örn "Mersin\'de limon mu portakal mı").' });
     }
 
