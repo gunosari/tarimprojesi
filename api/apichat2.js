@@ -49,6 +49,27 @@ function cleanupCache() {
   }
 }
 
+/** ======= ONCEDEN URETILMIS KARTLAR (batch_kartlar.js ciktisi) ======= */
+// Modul seviyesinde bir kez yuklenir; dosya yoksa sessizce devre disi kalir.
+let staticKartlar = null;
+function getStaticKartlar() {
+  if (staticKartlar !== null) return staticKartlar;
+  try {
+    const p = path.join(process.cwd(), 'public', 'karar_kartlari.json');
+    staticKartlar = JSON.parse(fs.readFileSync(p, 'utf8'));
+  } catch {
+    staticKartlar = { yil: null, kartlar: {} };   // dosya yok -> LLM'e dusulur
+  }
+  return staticKartlar;
+}
+
+function getStaticAnalysis(tip, secim, yil) {
+  const s = getStaticKartlar();
+  if (!s.kartlar || s.yil !== yil) return null;   // yil eskiyse kullanma
+  const kart = s.kartlar[`${tip}|${secim}`];
+  return kart ? kart.analiz : null;
+}
+
 /** ======= RATE LIMITING ======= */
 const rateLimitMap = new Map();
 const RATE_LIMIT_WINDOW = 60000;
@@ -316,7 +337,7 @@ function getUrunSorulari(Y) {
 /** ======= AI ANALYSIS ======= */
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
-async function generateAnalysis(secim, tip, sorular, sonuclar, maxYil) {
+async function generateAnalysis(secim, tip, sorular, sonuclar, maxYil, res) {
   const context = tip === 'il' 
     ? `${secim} ili için ${maxYil} yılı tarımsal analiz.`
     : `${secim} ürünü için ${maxYil} yılı Türkiye geneli analiz.`;
@@ -394,14 +415,37 @@ ${tip === 'il' ? `Her ürün grubu (Meyve, Sebze, Tahıl) için şu formatta bir
 10. **Analiz Sınırları**
    "Bu karar kartı; ürün bazında kesin üretim tahmini yapmaz, çiftçi bazlı gelir hesaplaması içermez, iklim senaryolarını modellemez. Analiz; TÜİK verileri üzerinden ${maxYil - 4}–${maxYil} yılları gerçekleşmiş verilere dayalı olup yön gösterici niteliktedir."`;
 
-  const response = await anthropic.messages.create({
+  // res VARSA: parçaları SSE ile akıt (web isteği)
+  // res YOKSA: tek seferde iste (batch script — akış gereksiz, daha az ek yük)
+  if (!res) {
+    const response = await anthropic.messages.create({
+      model: MODEL,
+      max_tokens: MAX_TOKENS,
+      system: systemMessage,
+      messages: [{ role: 'user', content: userMessage }]
+    });
+    return response.content[0].text;
+  }
+
+  const stream = await anthropic.messages.create({
     model: MODEL,
     max_tokens: MAX_TOKENS,
     system: systemMessage,
-    messages: [{ role: 'user', content: userMessage }]
+    messages: [{ role: 'user', content: userMessage }],
+    stream: true
   });
 
-  return response.content[0].text;
+  let fullText = '';
+  for await (const event of stream) {
+    if (event.type === 'content_block_delta' && event.delta?.type === 'text_delta') {
+      const chunk = event.delta.text;
+      fullText += chunk;
+      // SSE formatında gönder — frontend "data: {...}" satırlarını okuyacak
+      res.write(`data: ${JSON.stringify({ type: 'chunk', text: chunk })}\n\n`);
+    }
+  }
+
+  return fullText;
 }
 
 /** ======= HELPER: Get Lists ======= */
@@ -489,51 +533,61 @@ export default async function handler(req, res) {
       // Süresi dolan cache girdilerini temizle
       cleanupCache();
 
-      // Cache kontrolü — aynı analiz 24 saat içinde tekrar üretilmez
+      const sorular = tip === 'il' ? getIlSorulari(maxYil) : getUrunSorulari(maxYil);
+      const veriler = () => sorular.map((s, i) => ({ soru: s.soru, sonuc: sonuclar[i] }));
+
+      // SSE başlıkları — bağlantıyı akış moduna al
+      res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+      res.setHeader('Cache-Control', 'no-cache, no-transform');
+      res.setHeader('Connection', 'keep-alive');
+      res.setHeader('X-Accel-Buffering', 'no'); // proxy buffering kapat
+
+      // 1) Bellek cache — varsa tek parça gönder, LLM'i hiç çağırma
       const cachedAnaliz = getCachedAnalysis(tip, secim, maxYil);
       if (cachedAnaliz) {
-        return res.status(200).json({
-          success: true,
-          secim,
-          tip,
-          yil: maxYil,
-          analiz: cachedAnaliz,
-          cached: true,
-          cacheKey: getCacheKey(tip, secim, maxYil)
-        });
+        res.write(`data: ${JSON.stringify({ type: 'chunk', text: cachedAnaliz })}\n\n`);
+        res.write(`data: ${JSON.stringify({ type: 'done', cached: true, secim, tip, yil: maxYil })}\n\n`);
+        return res.end();
       }
 
-      const sorular = tip === 'il' ? getIlSorulari(maxYil) : getUrunSorulari(maxYil);
-      
+      // 2) Önceden üretilmiş statik kart (batch_kartlar.js) — LLM maliyeti sıfır
+      const staticAnaliz = getStaticAnalysis(tip, secim, maxYil);
+      if (staticAnaliz) {
+        setCachedAnalysis(tip, secim, maxYil, staticAnaliz);   // belleğe de al
+        res.write(`data: ${JSON.stringify({ type: 'chunk', text: staticAnaliz })}\n\n`);
+        res.write(`data: ${JSON.stringify({ type: 'done', cached: true, kaynak: 'statik', secim, tip, yil: maxYil })}\n\n`);
+        return res.end();
+      }
+
+      // SQL sorgularını çalıştır
       const sonuclar = [];
       for (const s of sorular) {
-        const params = s.params(secim);
-        const result = executeQuery(db, s.sql, params);
-        sonuclar.push(result);
+        sonuclar.push(executeQuery(db, s.sql, s.params(secim)));
       }
 
       if (!process.env.ANTHROPIC_API_KEY) {
-        return res.status(500).json({ error: 'ANTHROPIC_API_KEY tanımlı değil' });
+        res.write(`data: ${JSON.stringify({ type: 'error', error: 'ANTHROPIC_API_KEY tanımlı değil' })}\n\n`);
+        return res.end();
       }
 
-      const analiz = await generateAnalysis(secim, tip, sorular, sonuclar, maxYil);
+      // Ham verileri önce gönder (frontend "Ham Veriler" bölümünü doldurur)
+      res.write(`data: ${JSON.stringify({ type: 'meta', secim, tip, yil: maxYil, veriler: veriler() })}\n\n`);
 
-      // Cache'e kaydet
+      // Streaming analiz — parçalar generateAnalysis içinde res'e yazılıyor
+      let analiz;
+      try {
+        analiz = await generateAnalysis(secim, tip, sorular, sonuclar, maxYil, res);
+      } catch (e) {
+        res.write(`data: ${JSON.stringify({ type: 'error', error: e.message })}\n\n`);
+        return res.end();
+      }
+
+      // Tam metni cache'le
       setCachedAnalysis(tip, secim, maxYil, analiz);
 
-      return res.status(200).json({
-        success: true,
-        secim,
-        tip,
-        yil: maxYil,
-        analiz,
-        cached: false,
-        cacheKey: getCacheKey(tip, secim, maxYil),
-        veriler: sorular.map((s, i) => ({
-          soru: s.soru,
-          sonuc: sonuclar[i]
-        }))
-      });
+      // Bitiş sinyali
+      res.write(`data: ${JSON.stringify({ type: 'done', cached: false })}\n\n`);
+      return res.end();
     }
 
     return res.status(405).json({ error: 'Method not allowed' });
@@ -543,3 +597,8 @@ export default async function handler(req, res) {
     return res.status(500).json({ error: error.message });
   }
 }
+
+/** ======= BATCH SCRIPT ICIN NAMED EXPORT =======
+ * batch_kartlar.js bu fonksiyonlari kullanir; SQL tek yerde kalir.
+ * Vercel handler davranisini etkilemez. */
+export { getDB, executeQuery, getMaxYil, getIlSorulari, getUrunSorulari, getIller, getUrunler, generateAnalysis };
