@@ -399,6 +399,32 @@ Soru: "Sera domatesi dekara kaç para kazandırır" -> {"tip":"kazanc","il":null
 /** ===================== CEVAP ÜRETİMİ ===================== **/
 function fmt(n) { return Number(n || 0).toLocaleString('tr-TR'); }
 
+/** Türkçe ek uyumu — özel adlara kesme işaretiyle ek getirir */
+const SERT = new Set(['f','s','t','k','ç','ş','h','p']);   // FıSTıKÇı ŞaHaP
+function sonUnlu(s) {
+  const u = 'aeıioöuü';
+  for (let i = s.length - 1; i >= 0; i--) if (u.includes(s[i].toLowerCase())) return s[i].toLowerCase();
+  return 'a';
+}
+// İlgi hali: Adana'nın, Mersin'in, Ordu'nun, Düzce'nin
+function ekIn(ad) {
+  if (!ad) return '';
+  const son = ad[ad.length - 1].toLowerCase();
+  const unluSon = 'aeıioöuü'.includes(son);
+  const v = sonUnlu(ad);
+  const ek = v === 'a' || v === 'ı' ? 'ın' : v === 'e' || v === 'i' ? 'in' : v === 'o' || v === 'u' ? 'un' : 'ün';
+  return `${ad}'${unluSon ? 'n' : ''}${ek}`;
+}
+// Ayrılma hali: Adana'dan, Mersin'den, Tokat'tan
+function ekDen(ad) {
+  if (!ad) return '';
+  const son = ad[ad.length - 1].toLowerCase();
+  const v = sonUnlu(ad);
+  const kalin = 'aıou'.includes(v);
+  const d = SERT.has(son) ? 't' : 'd';
+  return `${ad}'${d}${kalin ? 'an' : 'en'}`;
+}
+
 function buildAnswer(p, rows) {
   if (!rows || rows.length === 0) return 'Bu sorguya uygun veri bulunamadı.';
   const yer = p.ilce ? `${p.ilce} (${p.il})` : (p.il || 'Türkiye');
@@ -407,11 +433,20 @@ function buildAnswer(p, rows) {
   if (p.intent === 'karsilastirma') {
     if (rows.length < 2) return `Karşılaştırma için iki ilin de ${urunAd} verisi gerekli; biri bulunamadı.`;
     const [a, b] = rows;   // üretime göre azalan sıralı
-    const fark = b.tpl > 0 ? Math.round((a.tpl - b.tpl) / b.tpl * 100) : 0;
+    let cumle;
+    if (b.tpl <= 0) {
+      cumle = `${b.il}'de ${p.yil} yılında ${urunAd} üretim kaydı yok.`;
+    } else {
+      const kat = a.tpl / b.tpl;
+      // 2 kattan fazlaysa "kat" daha okunur; altındaysa yüzde
+      cumle = kat >= 2
+        ? `${a.il}, ${ekIn(b.il)} yaklaşık ${kat.toFixed(1).replace('.', ',')} katı üretiyor (${fmt(a.tpl - b.tpl)} ton fazla).`
+        : `${a.il}, ${ekDen(b.il)} %${Math.round((a.tpl - b.tpl) / b.tpl * 100)} daha fazla üretiyor (${fmt(a.tpl - b.tpl)} ton).`;
+    }
     return `${p.yil} yılı ${urunAd} üretimi karşılaştırması:\n` +
       `• ${a.il}: ${fmt(a.tpl)} ton (${fmt(a.alan)} dekar)\n` +
       `• ${b.il}: ${fmt(b.tpl)} ton (${fmt(b.alan)} dekar)\n` +
-      `${a.il}, ${b.il}'den %${fark} daha fazla üretiyor.`;
+      cumle;
   }
   if (p.intent === 'siralama') {
     if (p.il && rows[0].sira) return `${rows[0].il}, ${p.yil} yılı ${urunAd} üretiminde ${rows[0].sira}. sırada (${fmt(rows[0].tpl)} ton).`;
@@ -480,7 +515,7 @@ function buildAnswer(p, rows) {
       const kat = rows[0].uretim / rows[1].uretim;
       const fark = rows[0].uretim - rows[1].uretim;
       sonuc = kat >= 1.15
-        ? `\n\n${rows[0].etiket}, ${rows[1].etiket} üretiminin yaklaşık ${kat.toFixed(1)} katı (${fmt(fark)} ton fazla).`
+        ? `\n\n${rows[0].etiket}, ${rows[1].etiket} üretiminin yaklaşık ${kat.toFixed(1).replace('.', ',')} katı (${fmt(fark)} ton fazla).`
         : `\n\nİkisi birbirine yakın; ${rows[0].etiket} ${fmt(fark)} ton önde.`;
     }
     return `${yer} ${p.yil} yılı üretim karşılaştırması:\n${lst}${sonuc}${eksikNot}`;
