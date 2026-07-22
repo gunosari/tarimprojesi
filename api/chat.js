@@ -290,6 +290,23 @@ function buildSQL(p) {
       ORDER BY fark ${yon} LIMIT ${limit}`;
   }
 
+  // 1f) URUN_KARSILASTIRMA: tek il (veya Türkiye) içinde 2+ ürünü yan yana kıyasla
+  // p.urunListesi = [{etiket:'limon', urunler:['Limon Ve Misket Limonu']}, {etiket:'portakal', urunler:[...]}]
+  if (intent === 'urun_karsilastirma' && p.urunListesi && p.urunListesi.length >= 2) {
+    // Her grup için CASE dalı; hepsinin ürünleri tek IN listesinde
+    const daller = p.urunListesi
+      .map(g => `WHEN "Ürün" IN (${inList(g.urunler)}) THEN '${g.etiket.replace(/'/g, "''")}'`)
+      .join(' ');
+    const tumUrunler = [...new Set(p.urunListesi.flatMap(g => g.urunler))];
+    return `SELECT CASE ${daller} END etiket,
+        SUM("Üretim") uretim, SUM("Alan") alan,
+        CASE WHEN SUM("Alan")>0 THEN ROUND(CAST(SUM("Üretim") AS FLOAT)/SUM("Alan")*1000) ELSE 0 END verim
+      FROM ${tablo}
+      WHERE "Yıl"=${yil}${ilFiltre}${ilceFiltre} AND "Ürün" IN (${inList(tumUrunler)})
+      GROUP BY etiket HAVING etiket IS NOT NULL
+      ORDER BY uretim DESC`;
+  }
+
   // 2) TREND: çok yıllı üretim (sadece il tablosu, 2014-2025)
   if (intent === 'trend') {
     return `SELECT "Yıl" yil, SUM("Üretim") tpl, SUM("Alan") alan
@@ -325,7 +342,8 @@ Alanlar:
 - "yil": Tek yıl geçiyorsa (örn 2023) o sayı; geçmiyorsa null.
 - "yilStart","yilEnd": Aralık/trend varsa (örn "son 5 yıl","2020-2024 arası") başlangıç ve bitiş; yoksa null.
 - "intent": "uretim" | "alan" | "siralama" | "urun_top" | "ilce_dagilim" | "verim" | "trend" | "karsilastirma". (tip="danismanlik" ise önemsiz, "uretim" yazabilirsin.)
-   * "karşılaştır","kıyasla","hangisi daha çok","X mi Y mi" + iki il -> "karsilastirma"
+   * İKİ İL karşılaştırması (aynı ürün, farklı iller): "Adana Antalya domates karşılaştır","Konya mı Ankara mı buğday" -> "karsilastirma"
+   * İKİ+ ÜRÜN karşılaştırması (aynı il, farklı ürünler): "Mersin'de limon mu portakal mı daha çok","domates biber salatalık Mersin'de","hangisi daha fazla üretiliyor limon mu muz mu" -> "urun_karsilastirma"
    * BİR ÜRÜNÜ en çok üreten/ekilen İLLER (ürün belli, il aranıyor): "en çok elma üreten il","limon üretiminde kaçıncı" -> "siralama"
    * BİR İL/İLÇEDE en çok üretilen/ekilen ÜRÜNLER (il belli, ürünler listeleniyor): "Mersin'de en çok üretilen 5 ürün","Tarsus'ta en çok ekilen ürünler","Konya'da hangi ürünler öne çıkıyor" -> "urun_top"
    * BİR ÜRÜNÜN bir ilin İLÇELERİNE dağılımı (il + ürün belli, ilçeler listeleniyor): "Mersin ilçelerinde domates","limon hangi ilçelerde","Mersin'de domates ilçe dağılımı","hangi ilçe en çok üretiyor" -> "ilce_dagilim"
@@ -337,6 +355,7 @@ Alanlar:
 - "metrik": intent="urun_top" | "ilce_dagilim" | "degisim" için. "uretim" (varsayılan, ton) veya "alan" (dekar). "en çok ekilen","alana göre","en geniş alan" -> "alan"; "en çok üretilen","en çok yetişen" -> "uretim".
 - "limit": intent="urun_top" veya "degisim" için kaç ürün istendiği (örn "ilk 5"->5, "en çok 10 ürün"->10). Belirtilmezse 5.
 - "yon": SADECE intent="degisim" için. "artan" (varsayılan) veya "azalan". "düşüşte","gerileyen","azalan","kaybeden" -> "azalan"; "artan","yükselen","büyüyen" -> "artan".
+- "urunListesi": SADECE intent="urun_karsilastirma" için. Karşılaştırılan ürün adlarının dizisi, en az 2 eleman (örn ["limon","portakal"]). Ürünleri kullanıcının yazdığı sade haliyle yaz. Bu alan doluysa "urun" alanını null bırak.
 Kurallar: Yazım hatalarını düzelt (anakara->ankara, kaysı->kayısı). En güncel yıl ${maxYil}.
 NOT: "ilce_dagilim" için bir il ADI ŞART (ilçeleri o ile göre listeleriz). "ilce" alanı null olmalı — çünkü tek ilçe değil TÜM ilçeler isteniyor.
 Örnekler:
@@ -357,6 +376,9 @@ Soru: "Mersin'de hangi ilçe domateste en verimli" -> {"tip":"veri","il":"Mersin
 Soru: "Adana'da son 5 yılda en çok artan ürün" -> {"tip":"veri","il":"Adana","ilce":null,"urun":null,"ortualti":false,"yil":null,"yilStart":${maxYil-4},"yilEnd":${maxYil},"intent":"degisim","metrik":"uretim","yon":"artan","limit":5}
 Soru: "Mersin'de hangi ürün düşüşte" -> {"tip":"veri","il":"Mersin","ilce":null,"urun":null,"ortualti":false,"yil":null,"yilStart":${maxYil-4},"yilEnd":${maxYil},"intent":"degisim","metrik":"uretim","yon":"azalan","limit":5}
 Soru: "Türkiye'de 2020'den beri en çok artan 10 ürün" -> {"tip":"veri","il":null,"ilce":null,"urun":null,"ortualti":false,"yil":null,"yilStart":2020,"yilEnd":${maxYil},"intent":"degisim","metrik":"uretim","yon":"artan","limit":10}
+Soru: "Mersin'de limon mu portakal mı daha çok" -> {"tip":"veri","il":"Mersin","ilce":null,"urun":null,"urunListesi":["limon","portakal"],"ortualti":false,"yil":null,"yilStart":null,"yilEnd":null,"intent":"urun_karsilastirma"}
+Soru: "Adana'da domates biber salatalık" -> {"tip":"veri","il":"Adana","ilce":null,"urun":null,"urunListesi":["domates","biber","salatalık"],"ortualti":false,"yil":null,"yilStart":null,"yilEnd":null,"intent":"urun_karsilastirma"}
+Soru: "Adana Antalya domates karşılaştır" -> {"tip":"veri","il":"Adana","il2":"Antalya","ilce":null,"urun":"domates","ortualti":false,"yil":null,"yilStart":null,"yilEnd":null,"intent":"karsilastirma"}
 Soru: "Antalya domates son 5 yıl trend" -> {"tip":"veri","il":"Antalya","ilce":null,"urun":"domates","ortualti":false,"yil":null,"yilStart":${maxYil - 4},"yilEnd":${maxYil},"intent":"trend"}
 Soru: "Antalya örtüaltı domates" -> {"tip":"veri","il":"Antalya","ilce":null,"urun":"domates","ortualti":true,"yil":null,"yilStart":null,"yilEnd":null,"intent":"uretim"}
 Soru: "Adana Antalya domates karşılaştır" -> {"tip":"veri","il":"Adana","il2":"Antalya","ilce":null,"urun":"domates","ortualti":false,"yil":null,"yilStart":null,"yilEnd":null,"intent":"karsilastirma"}
@@ -443,6 +465,25 @@ function buildAnswer(p, rows) {
     const baslik = azalan ? 'en çok azalan' : 'en çok artan';
     const olcu = alanBazli ? 'ekili alan' : 'üretim';
     return `${yer} ${p.yilStart}-${p.yilEnd} arası ${olcu} bakımından ${baslik} ürünler:\n${lst}`;
+  }
+  if (p.intent === 'urun_karsilastirma') {
+    const lst = rows.map((r, i) =>
+      `${i + 1}. ${r.etiket}: ${fmt(r.uretim)} ton (alan ${fmt(r.alan)} dekar, verim ${fmt(r.verim)} kg/dekar)`
+    ).join('\n');
+    // Sorulan ama o il/yılda verisi olmayan ürünler
+    const gelen = rows.map(r => r.etiket);
+    const eksik = (p.urunListesi || []).map(g => g.etiket).filter(e => !gelen.includes(e));
+    const eksikNot = eksik.length ? `\n\n(${eksik.join(', ')} için ${yer} ${p.yil} yılında üretim kaydı yok.)` : '';
+
+    let sonuc = '';
+    if (rows.length >= 2 && rows[1].uretim > 0) {
+      const kat = rows[0].uretim / rows[1].uretim;
+      const fark = rows[0].uretim - rows[1].uretim;
+      sonuc = kat >= 1.15
+        ? `\n\n${rows[0].etiket}, ${rows[1].etiket} üretiminin yaklaşık ${kat.toFixed(1)} katı (${fmt(fark)} ton fazla).`
+        : `\n\nİkisi birbirine yakın; ${rows[0].etiket} ${fmt(fark)} ton önde.`;
+    }
+    return `${yer} ${p.yil} yılı üretim karşılaştırması:\n${lst}${sonuc}${eksikNot}`;
   }
   if (p.intent === 'trend') {
     const lst = rows.map(r => `${r.yil}: ${fmt(r.tpl)} ton`).join('\n');
@@ -535,12 +576,33 @@ export default async function handler(req, res) {
       urunler = resolveUrun(f.urun, WL.urunIlceSet).map(u => 'Örtüaltı ' + u).filter(u => WL.urunIlceSet.has(u));
     }
 
+    // Çoklu ürün karşılaştırma: her terimi ayrı ayrı çözümle, etiketiyle sakla
+    // [{etiket:'limon', urunler:['Limon Ve Misket Limonu']}, ...] — boş çözümlenenler elenir
+    let urunListesi = null;
+    if (f.intent === 'urun_karsilastirma' && Array.isArray(f.urunListesi)) {
+      const set = ilceSet ? WL.urunIlceSet : WL.urunIlSet;
+      urunListesi = f.urunListesi
+        .map(t => ({ etiket: String(t).trim(), urunler: resolveUrun(t, set) }))
+        .filter(g => g.etiket && g.urunler.length);
+    }
+
     const p = {
-      il, il2, ilce: ilce || null, urunler, grup,
+      il, il2, ilce: ilce || null, urunler, grup, urunListesi,
       urunEtiket: grup ? norm(f.urun) : (f.urun || 'ürün'),
       yil, yilStart, yilEnd, intent: f.intent || 'uretim',
       metrik: f.metrik || 'uretim', limit: f.limit || 5, yon: f.yon || 'artan'
     };
+
+    // Çoklu karşılaştırmada en az 2 ürün çözümlenmeli
+    if (p.intent === 'urun_karsilastirma' && (!urunListesi || urunListesi.length < 2)) {
+      const cozulen = urunListesi ? urunListesi.map(g => g.etiket) : [];
+      const istenen = Array.isArray(f.urunListesi) ? f.urunListesi : [];
+      const eksik = istenen.filter(t => !cozulen.includes(String(t).trim()));
+      return res.status(200).json({ success: true, processingTime: Date.now() - t0,
+        answer: eksik.length
+          ? `Karşılaştırma için en az iki ürün gerekli; "${eksik.join('", "')}" için eşleşen ürün bulunamadı.`
+          : 'Karşılaştırma için en az iki ürün belirtin (örn "Mersin\'de limon mu portakal mı").' });
+    }
 
     // urun_top: ürün belirtmeye gerek yok (tüm ürünleri sıralıyoruz) — "bulunamadı" kontrolünü atla
     if (!grup && !f.ortualti && !urunler.length && f.urun && p.intent !== 'urun_top')
@@ -565,6 +627,9 @@ export default async function handler(req, res) {
       sql = buildSQL(p);
     } else if (p.intent === 'degisim') {
       // Artan/azalan ürün sıralaması il tablosunda (2014-2025) — örtüaltı dalına düşmesin
+      sql = buildSQL(p);
+    } else if (p.intent === 'urun_karsilastirma') {
+      // Çoklu ürün karşılaştırma buildSQL'de CASE WHEN ile — örtüaltı dalına düşmesin
       sql = buildSQL(p);
     } else if (ilGeneliOrtu) {
       const ilFiltre = il ? ` AND "İl"='${il.replace(/'/g, "''")}'` : '';
