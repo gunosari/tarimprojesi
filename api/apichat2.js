@@ -10,7 +10,7 @@ import Anthropic from '@anthropic-ai/sdk';
 /** ======= CONFIG ======= */
 const DB_FILE = 'kds_vt.db';
 const MODEL = 'claude-haiku-4-5-20251001';
-const MAX_TOKENS = 3500;
+const MAX_TOKENS = 6000;   // 10 bölümlük kart ~5.500 token; 3500 kesiyordu
 // Sadece bu kaynaklar API'yi çağırabilir — '*' kaldırıldı, Claude maliyeti kötüye kullanıma kapalı
 const ALLOWED_ORIGINS = [
   'https://tarim.emomonsdijital.com',   // chatbot/karar.html buradan açılıyor — asıl çağıran
