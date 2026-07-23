@@ -10,7 +10,7 @@ import Anthropic from '@anthropic-ai/sdk';
 /** ======= CONFIG ======= */
 const DB_FILE = 'kds_vt.db';
 const MODEL = 'claude-haiku-4-5-20251001';
-const MAX_TOKENS = 6000;   // 10 bölümlük kart ~5.500 token; 3500 kesiyordu
+const MAX_TOKENS = 9000;   // 12.000+ karakterlik kart ~5.900 token; 6000 sınıra dayanıyordu
 // Sadece bu kaynaklar API'yi çağırabilir — '*' kaldırıldı, Claude maliyeti kötüye kullanıma kapalı
 const ALLOWED_ORIGINS = [
   'https://tarim.emomonsdijital.com',   // chatbot/karar.html buradan açılıyor — asıl çağıran
@@ -47,6 +47,11 @@ function cleanupCache() {
   for (const [key, val] of analysisCache.entries()) {
     if (now - val.timestamp > CACHE_TTL) analysisCache.delete(key);
   }
+}
+
+/** Kart tam mi? Kesik/bozuk kart cache'lenmemeli. */
+function kartGecerli(t) {
+  return typeof t === 'string' && t.length > 3000 && /Analiz S\u0131n\u0131rlar\u0131/.test(t);
 }
 
 /** ======= ONCEDEN URETILMIS KARTLAR (batch_kartlar.js ciktisi) ======= */
@@ -165,6 +170,10 @@ function safeJson(obj, maxLen = 2000) {
 }
 
 /** ======= DYNAMIC QUERIES ======= */
+// Pamuk türevleri aynı ALAN'ı 3 kez tekrarlıyor (Kütlü / Çiğit / Lifli),
+// üretimde de çiğit+lif zaten kütlünün içinde. Toplamlarda türevleri düş.
+const PAMUK_HARIC = `"Ürün" NOT IN ('Pamuk Çekirdeği Çiğit','Pamuk Çırçırlanmış Lifli')`;
+
 function getIlSorulari(Y) {
   const Y4 = Y - 4;
   return [
@@ -177,7 +186,7 @@ function getIlSorulari(Y) {
     { 
       id: 2, 
       soru: "Son 3 yılda üretim trendi nasıl?", 
-      sql: `SELECT "Yıl", SUM("Üretim") as toplam FROM kds WHERE "İl" = ? AND "Yıl" >= ? GROUP BY "Yıl" ORDER BY "Yıl"`,
+      sql: `SELECT "Yıl", SUM("Üretim") as toplam_TON FROM kds WHERE "İl" = ? AND "Yıl" >= ? AND ${PAMUK_HARIC} GROUP BY "Yıl" ORDER BY "Yıl"`,
       params: (secim) => [secim, Y - 2]
     },
     { 
@@ -204,7 +213,7 @@ function getIlSorulari(Y) {
     { 
       id: 4, 
       soru: `${Y} yılında hangi ürün grubunda en güçlü?`, 
-      sql: `SELECT "Ürün Grubu", SUM("Üretim") as toplam, SUM("Alan") as alan FROM kds WHERE "İl" = ? AND "Yıl" = ? GROUP BY "Ürün Grubu" ORDER BY toplam DESC LIMIT 1`,
+      sql: `SELECT "Ürün Grubu", SUM("Üretim") as toplam_TON, SUM("Alan") as alan_DEKAR FROM kds WHERE "İl" = ? AND "Yıl" = ? AND ${PAMUK_HARIC} GROUP BY "Ürün Grubu" ORDER BY toplam_TON DESC LIMIT 1`,
       params: (secim) => [secim, Y]
     },
     { 
@@ -229,8 +238,8 @@ function getIlSorulari(Y) {
     },
     { 
       id: 7, 
-      soru: "Son 5 yılda toplam ekim alanı trendi", 
-      sql: `SELECT "Yıl", SUM("Alan") as toplam_alan FROM kds WHERE "İl" = ? AND "Yıl" >= ? GROUP BY "Yıl" ORDER BY "Yıl"`,
+      soru: "Son 5 yılda toplam ekim alanı trendi (DEKAR, çift ekim dahil)", 
+      sql: `SELECT "Yıl", SUM("Alan") as toplam_alan_DEKAR FROM kds WHERE "İl" = ? AND "Yıl" >= ? AND ${PAMUK_HARIC} GROUP BY "Yıl" ORDER BY "Yıl"`,
       params: (secim) => [secim, Y4]
     },
     { 
@@ -244,14 +253,14 @@ function getIlSorulari(Y) {
       soru: `${Y} yılında bu il toplam üretimde Türkiye'de kaçıncı sırada?`, 
       sql: `SELECT sira, il, toplam FROM (
             SELECT "İl" as il, SUM("Üretim") as toplam, ROW_NUMBER() OVER (ORDER BY SUM("Üretim") DESC) as sira
-            FROM kds WHERE "Yıl" = ? GROUP BY "İl") t
+            FROM kds WHERE "Yıl" = ? AND ${PAMUK_HARIC} GROUP BY "İl") t
             WHERE il = ? OR sira <= 5 ORDER BY sira`,
       params: (secim) => [Y, secim]
     },
     { 
       id: 10, 
       soru: "Son 5 yılda yıllık üretim değişim oranı nedir?", 
-      sql: `SELECT "Yıl", SUM("Üretim") as uretim FROM kds WHERE "İl" = ? AND "Yıl" >= ? GROUP BY "Yıl" ORDER BY "Yıl"`,
+      sql: `SELECT "Yıl", SUM("Üretim") as uretim_TON FROM kds WHERE "İl" = ? AND "Yıl" >= ? AND ${PAMUK_HARIC} GROUP BY "Yıl" ORDER BY "Yıl"`,
       params: (secim) => [secim, Y4]
     }
   ];
@@ -360,6 +369,33 @@ GENEL KURALLAR:
 - Türetilen oranları "yaklaşık" ve "hesaplanan" olarak belirt; ham veri gibi sunma.
 - Yüzde ve sıralama bilgilerini veride nasıl geçiyorsa öyle yaz
 
+BİRİMLER (kesindir, asla çevirme yapma):
+- Üretim = TON. Alan = DEKAR.
+- "hektar" veya "ha" kelimesini ASLA kullanma. Alanı dekar olarak yaz.
+- 1 hektar = 10 dekardır ama çevirme yapma, veriyi olduğu gibi dekar olarak sun.
+- Alan rakamının yanına "(ürün bazlı toplam, çift ekim dahil)" notunu düş.
+
+HESAPLAMA YASAKLARI:
+- Toplam Üretim ÷ Toplam Alan yaparak verimlilik (ton/dekar, ton/ha) HESAPLAMA.
+  Neden: toplam üretim dane tahıl, silajlık mısır ve yeşil ot karışımıdır; ortak paydaya bölmek anlamsızdır.
+  "Tahmini Verimlilik" satırı veya tablosu OLUŞTURMA.
+- Sorgu sonucunda DÖNMEYEN hiçbir pay/oran türetme. "Bu iki ürün toplamın %X'i" gibi
+  cümleyi yalnızca veride açıkça varsa yaz; yoksa hiç yazma.
+
+İSİM YASAĞI (veride yok, uydurma riski yüksek):
+- Kurum, ajans, program, proje adı YAZMA. "İl Müdürlüğü", "Bakanlık", "ilgili kalkınma ajansı"
+  gibi genel ifadeler kullan. Kısaltma (KUDAKA, ÇKA, GKGM vb.) kullanma.
+- Bitki hastalığı, zararlı, çeşit adı YAZMA. "hastalık baskısı", "bitki sağlığı sorunları"
+  gibi genel ifade kullan.
+- Üretim düşüşüne agronomik neden ATFETME. Veride neden bilgisi yok; "nedenleri
+  araştırılmalıdır" de.
+
+ÜRÜN GRUBU DOĞRULAMASI:
+- Bir ürünü örneklerken ait olduğu "Ürün Grubu"nu veriden kontrol et.
+  Domates, biber, patlıcan, hıyar SEBZEDİR — meyve örneği olarak gösterme.
+- "Tahıl" grubu pamuk, patates, soya, yem bitkilerini de içerir. Bu grubu
+  "tarla bitkileri" olarak adlandır, saf tahıl gibi yorumlama.
+
 AKSİYON YAZIM KURALLARI (kesindir, her çalıştırmada aynı mantık):
 📉 Üretimi AZALAN ürünler → yalnızca: neden analizi, yapısal sorun tespiti, önleyici tedbirler, alternatif ürüne geçiş. ❌ Asla: kapasite artırımı, yatırım çağrısı.
 📈 Üretimi ARTAN ürünler → yalnızca: kapasite artışı, yatırım fırsatı, ihracat/pazar geliştirme, değer zinciri. ❌ Asla: sorun odaklı dil, risk büyütme.
@@ -424,7 +460,11 @@ ${tip === 'il' ? `Her ürün grubu (Meyve, Sebze, Tahıl) için şu formatta bir
       system: systemMessage,
       messages: [{ role: 'user', content: userMessage }]
     });
-    return response.content[0].text;
+    const metin = response.content[0].text;
+    if (response.stop_reason === 'max_tokens') {
+      return metin + '\n\n> Not: Kart token sinirina takildi, eksik olabilir.';
+    }
+    return metin;
   }
 
   const stream = await anthropic.messages.create({
@@ -436,7 +476,9 @@ ${tip === 'il' ? `Her ürün grubu (Meyve, Sebze, Tahıl) için şu formatta bir
   });
 
   let fullText = '';
+  let stopReason = null;
   for await (const event of stream) {
+    if (event.type === 'message_delta') stopReason = event.delta?.stop_reason ?? stopReason;
     if (event.type === 'content_block_delta' && event.delta?.type === 'text_delta') {
       const chunk = event.delta.text;
       fullText += chunk;
@@ -444,6 +486,8 @@ ${tip === 'il' ? `Her ürün grubu (Meyve, Sebze, Tahıl) için şu formatta bir
       res.write(`data: ${JSON.stringify({ type: 'chunk', text: chunk })}\n\n`);
     }
   }
+  // Token limitine carpip kesildiyse isaretle
+  if (stopReason === 'max_tokens') fullText += '\n\n> Not: Kart token sinirina takildi, eksik olabilir.';
 
   return fullText;
 }
@@ -582,8 +626,8 @@ export default async function handler(req, res) {
         return res.end();
       }
 
-      // Tam metni cache'le
-      setCachedAnalysis(tip, secim, maxYil, analiz);
+      // Sadece TAM kartlari cache'le — kesik kart 24 saat donup kalmasin
+      if (kartGecerli(analiz)) setCachedAnalysis(tip, secim, maxYil, analiz);
 
       // Bitiş sinyali
       res.write(`data: ${JSON.stringify({ type: 'done', cached: false })}\n\n`);
